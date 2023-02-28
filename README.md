@@ -4,7 +4,7 @@ Key features relative to other phasing tools include:
 
 * Joint phasing of small variants and structural variants
 * Support for multi-allelic variation
-* Creates [longer, correct phase blocks](docs/performance.md) relative to the current best practice
+* Creates [longer, correct phase blocks](docs/performance.md#summary-figure) relative to the current best practice
 * No downsampling of the data
 * [Novel algorithms](docs/methods.md): dual-mode allele assignment and core A* phasing algorithm
 * Quality of life additions: innate multi-threading, simultaneous haplotagging and statistics generation
