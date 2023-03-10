@@ -17,6 +17,7 @@ We are still tweaking the input / output file formats and making changes that ca
 * [Latest release with binary](https://github.com/PacificBiosciences/HiPhase/releases/latest)
 
 ## Documentation
+* [Installation instructions](docs/install.md)
 * [User guide with quickstart](docs/user_guide.md)
 * [Output files](docs/user_guide.md#output-files)
 * [Methods](docs/methods.md)
