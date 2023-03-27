@@ -3,6 +3,7 @@ Table of contents:
 
 * [Quickstart](#quickstart)
 * [Common uses cases](#common-use-cases)
+* [Supported upstream processes](#supported-upstream-processes)
 * [Output files](#output-files)
 
 # Quickstart
@@ -129,6 +130,18 @@ By default, HiPhase will effectively skip phase blocks that only contain a singl
 However, there may be situations where generating this information and/or haplotagging the reads is still useful.
 To enable the phasing of these blocks, pass `--phase-singletons` to the CLI.
 Note: this is likely to lead to increased compute / run time depending on the relative abundance of singletons in the dataset and the quantity of reads overlapping that data.
+
+# Supported upstream processes
+The following upstream processes are supported as inputs to HiPhase:
+
+* Aligners (BAM files):
+  * [pbmm2](https://github.com/PacificBiosciences/pbmm2) (recommended)
+  * [minimap2](https://github.com/lh3/minimap2)
+* Variant callers
+  * [DeepVariant](https://github.com/google/deepvariant) - for SNV/indel
+  * [pbsv](https://github.com/PacificBiosciences/pbsv) - for structural variants
+
+Other upstream processes may work with HiPhase, but there is no official support for them at this time.
 
 # Output files
 ## Phased VCF files
