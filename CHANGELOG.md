@@ -1,3 +1,12 @@
+# v0.8.1
+## Changes
+- Adds `--ignore-read-groups` flag that will skip the read group checks for provided BAM files. This option can only be used to phase one dataset at a time. Resolves #3.
+- Adds `--haplotag-file <FILE>` option that will create a TSV/CSV file containing read haplotag information. Resolves #4.
+
+## Fixed
+- Corrected some typos in CLI help menu
+- Changes HP tag in output BAM files from an i32 to a u8
+
 # v0.8.0
 ## Changes
 Multi-sample VCF inputs are now supported: 
