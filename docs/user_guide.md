@@ -5,6 +5,7 @@ Table of contents:
 * [Common uses cases](#common-use-cases)
 * [Supported upstream processes](#supported-upstream-processes)
 * [Output files](#output-files)
+* [FAQ](#faq)
 
 # Quickstart
 ```bash
@@ -231,6 +232,30 @@ HG001	chr4	349787	207079	203594	3485	166367	164916	823	61	12	247	1	4148	203594	5
 ...
 ```
 
+### Haplotag file (`--haplotag-file`)
+This CSV/TSV file contains haplotag information for aligned reads. 
+Note that while this contains the same information as the HP tag in the haplotagged output BAMs, generating those output BAMs is not required to generate this file.
+
+Fields:
+* `source_block_index` - The index of the phase problem within HiPhase. These values are 0-based and monotonically increasing. Duplicates can appear if an initial phase block was split while solving the phase problem. Blocks indices may be skipped if singleton blocks are not enabled.
+* `sample_name` - The sample name for the block, mostly for multi-sample inputs.
+* `chrom` - The chromosome the block is on.
+* `phase_block_id` - The phase block ID, which should match PS tags in both the VCF and BAM outputs.
+* `read_name` - The read name from the BAM file, all mappings for a given read will have the same haplotag within a single block.
+* `haplotag` - The assigned haplotype ID (HP in BAM), either 1 or 2.
+
+Example:
+```
+source_block_index	sample_name	chrom	phase_block_id	read_name	haplotag
+0	HG001	chr1	10492	m64109_200807_075817/118227363/ccs	1
+0	HG001	chr1	10492	m64109_200810_062248/32113861/ccs	2
+0	HG001	chr1	10492	m64109_200807_075817/6948622/ccs	1
+0	HG001	chr1	10492	m64109_200813_162416/12846754/ccs	1
+0	HG001	chr1	10492	m64109_200805_204709/170461776/ccs	1
+0	HG001	chr1	10492	m64109_200815_033514/155779891/ccs	2
+...
+```
+
 ### Algorithm Statistics File (`--stats-file`)
 This CSV/TSV file contains statistics regarding the performance of the underlying algorithms while running HiPhase.
 This file is primarily for developers looking to improve HiPhase, but may be of use while identifying problematic phase blocks.
@@ -268,3 +293,9 @@ block_index,sample_name,chrom,start,end,num_variants,num_reads,skipped_reads,num
 0,example_name,chr1,10107,31294,62,76,183,2916,"[2239, 136, 22, 0, 0, 0, 0, 0, 0, 0]","[432, 85, 2, 0, 0, 0, 0, 0, 0, 0]","[13, 26, 0, 0, 0, 0, 0, 0, 0, 0]","[1492, 64, 19, 0, 0, 0, 0, 0, 0, 0]","[1179, 157, 5, 0, 0, 0, 0, 0, 0, 0]",false,3705,21294,23957,0.8888425094961807,44,18,0
 ...
 ```
+
+# FAQ
+## How do I fix "Error during BAM read group parsing: BAM file has no read groups (RG) tag"?
+By default, HiPhase checks read group IDs to assign BAM files to a VCF sample ID for phasing.
+If you are sure that all provided BAM files all correspond to a single sample ID, you can pass the `--ignore-read-groups` flag to disable this check.
+Note that this mode can only be used for single-sample phasing.
