@@ -23,6 +23,11 @@ We are still tweaking the input / output file formats and making changes that ca
 * [Methods](docs/methods.md)
 * [Performance](docs/performance.md)
 
+## Citation
+If you use HiPhase, please cite our pre-print:
+
+[Holt, J. M., Saunders, C. T., Rowell, W. J., Kronenberg, Z., Wenger, A. M., & Eberle, M. (2023). HiPhase: Jointly phasing small and structural variants from HiFi sequencing. _bioRxiv_, 2023-05.](https://doi.org/10.1101/2023.05.03.539241)
+
 ## Need help?
 If you notice any missing features, bugs, or need assistance with analyzing the output of HiPhase, 
 please don't hesitate to [reach out by email](mailto:mholt@pacificbiosciences.com) or open a GitHub issue.

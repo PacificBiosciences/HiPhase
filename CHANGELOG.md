@@ -1,3 +1,11 @@
+# v0.9.0
+## Changes
+- Adds support for CRAM input and output files
+- The reference file (`--reference`) is now a required parameter for HiPhase. This prevents users from accidentally forgetting the reference file which leads to drastically different performance.
+
+## Fixed
+- Corrected an error where bgzipped reference files were not correctly loading
+
 # v0.8.1
 ## Changes
 - Adds `--ignore-read-groups` flag that will skip the read group checks for provided BAM files. This option can only be used to phase one dataset at a time. Resolves #3.

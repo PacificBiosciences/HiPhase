@@ -21,7 +21,7 @@ Parameters:
 * `--bam {IN_BAM}` - path to a BAM file containing reads only from the sample that is being phased, this option can be specified multiple times; each BAM file can only contain reads from a single sample
 * `--vcf {IN_VCF}` - path to a VCF file containing the variants to phase, this option can be specified multiple times; each sample being phased must appear in each provided VCF file
 * `--output-vcf {OUT_VCF}` - path to the output VCF that will contain the phased variants, this option must be specified the same number of times as `--vcf` 
-* `--reference {REFERENCE}` - a FASTA file containing the reference genome, gzip allowed; the reference genome file is optional, but _very strongly_ recommended for optimal performance
+* `--reference {REFERENCE}` - a FASTA file containing the reference genome, gzip allowed; as of v0.9.0, this is a required parameter
 * `--threads {THREADS}` - number of threads to use for phasing (default: 1)
 
 ## Quickstart Example
@@ -85,7 +85,6 @@ hiphase \
 To *jointly* phase small variants and SVs, pass both VCF files to HiPhase and specify two output VCF files in the same order as input.
 Currently, DeepVariant and pbsv are the two supported input types.
 While not required, it is *recommended* that global re-alignment is enabled when SVs are used.
-If global re-alignment is used, a reference genome file _must_ be provided via `--reference {REFERENCE}`.
 
 ```bash
 hiphase \
