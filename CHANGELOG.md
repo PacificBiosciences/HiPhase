@@ -1,3 +1,8 @@
+# v0.10.0
+## Changes
+- Adds support for multi-threaded BAM I/O via shared thread pools. Internal testing with default parameters showed ~40% reduction in wall-clock time when haplotagging is enabled with 16 threads. User experience will vary based on file type, disk type, and I/O contention. Resolves #9.
+- Adds `--io-threads` option for greater control over the number of threads used in the thread pool. Defaults to the same number provided to `--threads`.
+
 # v0.9.0
 ## Changes
 - Adds support for CRAM input and output files
