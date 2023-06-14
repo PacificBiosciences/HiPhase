@@ -1,3 +1,9 @@
+# v0.10.1
+## Fixed
+- Corrected a panic caused by reference mismatches to produce a human-readable error message (Resolves #12)
+- Fixed an issue parsing unexpected CIGAR strings for local re-alignment and SV deletions
+- Added a check for gzip encoding and tabix index for input VCF file to prevent uninterpretable segfault in htslib (Resolves #13)
+
 # v0.10.0
 ## Changes
 - Adds support for multi-threaded BAM I/O via shared thread pools. Internal testing with default parameters showed ~40% reduction in wall-clock time when haplotagging is enabled with 16 threads. User experience will vary based on file type, disk type, and I/O contention. Resolves #9.
