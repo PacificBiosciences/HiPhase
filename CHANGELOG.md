@@ -1,3 +1,7 @@
+# v0.10.2
+## Fixed
+- Replaced a panic caused by large WFA edit distance with a human-readable error message (Resolves #15)
+
 # v0.10.1
 ## Fixed
 - Corrected a panic caused by reference mismatches to produce a human-readable error message (Resolves #12)
