@@ -81,10 +81,10 @@ hiphase \
 ```
 
 # Common use cases
-## Joint phasing small variants and SVs
-To *jointly* phase small variants and SVs, pass both VCF files to HiPhase and specify two output VCF files in the same order as input.
-Currently, DeepVariant and pbsv are the two supported input types.
-While not required, it is *recommended* that global re-alignment is enabled when SVs are used.
+## Joint phasing small variants, structural variants, and tandem repeats
+To *jointly* phase small variants, structural variants, and tandem repeats, pass all VCF files to HiPhase and specify one output VCF file for each in the same order as input.
+Currently, DeepVariant, pbsv, and TRGT are the three supported input types.
+While not required, it is *strongly recommended* that global re-alignment is enabled when structural variants and tandem repeats are provided.
 
 ```bash
 hiphase \
@@ -94,6 +94,8 @@ hiphase \
     --output-vcf HG001.GRCh38.deepvariant.phased.vcf.gz \
     --vcf HG001.GRCh38.pbsv.vcf.gz \
     --output-vcf HG001.GRCh38.pbsv.phased.vcf.gz \
+    --vcf HG001.GRCh38.trgt.vcf.gz \
+    --output-vcf HG001.GRCh38.trgt.phased.vcf.gz \
     ...
 ```
 
@@ -144,6 +146,7 @@ The following upstream processes are supported as inputs to HiPhase:
 * Variant callers
   * [DeepVariant](https://github.com/google/deepvariant) - for SNV/indel
   * [pbsv](https://github.com/PacificBiosciences/pbsv) - for structural variants
+  * [TRGT](https://github.com/PacificBiosciences/trgt) - for tandem repeats
 
 Other upstream processes may work with HiPhase, but there is no official support for them at this time.
 
@@ -156,10 +159,16 @@ Following recommendations of the VCF v4.2 specification, the PS tag is set to th
 Note that if multiple VCF files are provided as input (e.g. small variants and structural variants), the PS tags are shared.
 This means that the first variant in the block may match a variant position from a _different_ VCF file (e.g. since there are fewer SVs, the PS tag is often referrring to a small variant).
 
-HiPhase allows heterozygous variants to be converted to homozygous if that leads to a more optimal solution.
+HiPhase allows heterozygous variants to be treated as homozygous if that leads to a more optimal solution.
 This is most commonly caused by noisy genomic regions and/or noisy indel calls.
 When this happens, HiPhase _does not_ convert the output variant into the corresponding homozygous representation.
 Instead, that variant is simply left as an unphased heterozygous call without a phase set ID (i.e. the VCF line is copied without changes).
+
+### Additional VCF fields
+The following are non-standard tags that HiPhase may include in the VCF output:
+
+* FORMAT field `PF` tag - Short for **P**hase **F**lags. This will be set with a String label when the variant was intentionally excluded from the phasing algorithm. Possible values:
+  * `TR_OVERLAP` - indicates that the variant is fully contained within a tandem repeat call and was intentionally ignored because it is likely less complete and/or correct when compared to the tandem repeat call
 
 ## Haplotagged BAM files
 HiPhase follows the same [haplotagging convention as WhatsHap](https://whatshap.readthedocs.io/en/latest/guide.html#whatshap-haplotag), allowing for visualization tools (such as IGV) to use existing frameworks.
@@ -270,7 +279,7 @@ Fields:
 * `num_reads` - the number of read mappings loaded to perform phasing
 * `skipped_reads` - the number of read mappings that were loaded but not used for phasing
 * `num_alleles` - the number of alleles that were defined (exact and in-exact) while loading reads
-* `allele_matches` - the number of exactly-matching alleles for a given variant type; these are stored as an array corresponding to this order: [SNV, Insertion, Deletion, Indel, SvInsertion, SvDeletion, SvDuplication, SvInversion, SvBreakend, Unknown]
+* `allele_matches` - the number of exactly-matching alleles for a given variant type; these are stored as an array corresponding to this order: [SNV, Insertion, Deletion, Indel, SvInsertion, SvDeletion, SvDuplication, SvInversion, SvBreakend, TandemRepeat, Unknown]
 * `allele_partials` - the number of non-exact matching alleles for a given variant type (see order above); note that if global re-alignment is used, _all_ matching alleles will be assigned to this category
 * `allele_failures` - the number of alleles that failed to match for a given variant type (see order above); this includes ambiguous / equal matches and deleted alleles
 * `allele0_assigned` - the number of alleles internally assigned to allele0 (typically reference) for a given variant type (see order above)
@@ -288,8 +297,8 @@ Fields:
 Example:
 ```
 block_index,sample_name,chrom,start,end,num_variants,num_reads,skipped_reads,num_alleles,allele_matches,allele_partials,allele_failures,allele0_assigned,allele1_assigned,is_global_realignment,pruned_solutions,estimated_cost,actual_cost,cost_ratio,phased_variants,homozygous_variants,skipped_variants
-1,example_name,chr1,42042,78514,7,15,21,60,"[10, 18, 0, 0, 0, 0, 0, 0, 0, 0]","[12, 18, 2, 0, 0, 0, 0, 0, 0, 0]","[0, 1, 0, 0, 0, 0, 0, 0, 0, 0]","[4, 6, 0, 0, 0, 0, 0, 0, 0, 0]","[18, 30, 2, 0, 0, 0, 0, 0, 0, 0]",false,0,11,11,1.0,7,0,0
-0,example_name,chr1,10107,31294,62,76,183,2916,"[2239, 136, 22, 0, 0, 0, 0, 0, 0, 0]","[432, 85, 2, 0, 0, 0, 0, 0, 0, 0]","[13, 26, 0, 0, 0, 0, 0, 0, 0, 0]","[1492, 64, 19, 0, 0, 0, 0, 0, 0, 0]","[1179, 157, 5, 0, 0, 0, 0, 0, 0, 0]",false,3705,21294,23957,0.8888425094961807,44,18,0
+0,HG001,chr1,10107,31294,63,163,96,3079,"[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[2669, 235, 24, 0, 0, 151, 0, 0, 0, 0, 0]","[15, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[1492, 74, 19, 0, 0, 145, 0, 0, 0, 0, 0]","[1177, 161, 5, 0, 0, 6, 0, 0, 0, 0, 0]",true,3061,2610,2902,0.8993797381116472,49,14,0
+1,HG001,chr1,42042,78514,8,19,17,70,"[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[22, 36, 2, 0, 0, 0, 0, 0, 0, 10, 0]","[0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[20, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0]","[2, 36, 2, 0, 0, 0, 0, 0, 0, 0, 0]",true,0,0,0,1.0,8,0,0
 ...
 ```
 
@@ -298,3 +307,12 @@ block_index,sample_name,chrom,start,end,num_variants,num_reads,skipped_reads,num
 By default, HiPhase checks read group IDs to assign BAM files to a VCF sample ID for phasing.
 If you are sure that all provided BAM files all correspond to a single sample ID, you can pass the `--ignore-read-groups` flag to disable this check.
 Note that this mode can only be used for single-sample phasing.
+
+## Why are some small/structural variants unphased when I added tandem repeats?
+DeepVariant, pbsv, and TRGT all have overlap in the variants that are called, but this is especially pronounced with TRGT calls.
+In general, the tandem repeat calls from TRGT are more accurate and less fragmented than the corresponding small variants or structural variant calls, which tend to have more errors or spurious calls and tend to get fragmented into multiple entries in the VCF file.
+HiPhase handles these overlaps by ignoring (i.e., not phasing) any variant calls that are fully contained within a TRGT tandem repeat call.
+Since TRGT calls often correspond to multiple small variant calls, the total number of phased variants tends to drop when TRGT is added.
+Additionally, this has the benefit of removing false heterozygous variants in the tandem repeat regions.
+This can have the side effect of (correctly) reducing block NG50 when those false variants are the only links between two otherwise unlinked phase blocks.
+Variants that are intentionally excluded from phasing this way will have a FORMAT `PF` tag of `TR_OVERLAP`.

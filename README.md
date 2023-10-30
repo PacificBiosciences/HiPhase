@@ -9,6 +9,8 @@ Key features relative to other phasing tools include:
 * [Novel algorithms](docs/methods.md): dual-mode allele assignment and core A* phasing algorithm
 * Quality of life additions: innate multi-threading, simultaneous haplotagging and statistics generation
 
+Authors: [Matt Holt](https://github.com/holtjma), [Chris Saunders](https://github.com/ctsa)
+
 ## Early release warning
 Please note that HiPhase is still in early development. 
 We are still tweaking the input / output file formats and making changes that can affect the behavior of the program.
@@ -30,7 +32,7 @@ If you use HiPhase, please cite our pre-print:
 
 ## Need help?
 If you notice any missing features, bugs, or need assistance with analyzing the output of HiPhase, 
-please don't hesitate to [reach out by email](mailto:mholt@pacificbiosciences.com) or open a GitHub issue.
+please don't hesitate to open a GitHub issue.
 
 ## Support information
 HiPhase is a pre-release software intended for research use only and not for use in diagnostic procedures. 
