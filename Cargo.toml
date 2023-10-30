@@ -1,0 +1,38 @@
+[package]
+name = "hiphase"
+version = "1.0.0"
+authors = ["J. Matthew Holt <mholt@pacificbiosciences.com>"]
+description = "A tool for phasing HiFi VCF files."
+edition = "2021"
+license-file="LICENSE.md"
+
+[build-dependencies]
+vergen = { version = "8.2.4", features = ["git", "gitcl"] }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# Note: cmake is required, module load cmake/3.20.2 for initial compiles
+
+[dependencies]
+bio = "1.2.0"
+bit-vec = "0.6.3"
+chrono = "0.4.24"
+clap = { version = "4.0.13", features = ["derive"] }
+cpu-time = "1.0.0"
+csv = "1.1.6"
+env_logger = "0.9.1"
+exitcode = "1.1.2"
+flate2 = "1.0.26"
+lazy_static = "1.4.0"
+log = "0.4.17"
+priority-queue = "1.2.3"
+# consider the older version if we run into build issues later
+# rust-htslib = { version = "0.37.0", default-features = false }
+rust-htslib = { version = "0.39.5", default-features = false, features = ["static"] }
+rustc-hash = "1.1.0"
+serde = "1.0.147"
+simple-error = "0.2.3"
+threadpool = "1.8.1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
