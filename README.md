@@ -1,4 +1,11 @@
-# HiPhase : Phasing tool for PacBio HiFi reads
+<h1 align="center"><img width="300px" src="images/logo_HiPhase.svg"/></h1>
+
+<h1 align="center">HiPhase</h1>
+
+<p align="center">A tool for jointly phasing small, structural, and tandem repeat variants for PacBio sequencing data</p>
+
+***
+
 HiPhase will phase variant calls made from [PacBio HiFi](https://www.pacb.com/technology/hifi-sequencing/) datasets.
 Key features relative to other phasing tools include:
 
@@ -10,10 +17,6 @@ Key features relative to other phasing tools include:
 * Quality of life additions: innate multi-threading, simultaneous haplotagging and statistics generation
 
 Authors: [Matt Holt](https://github.com/holtjma), [Chris Saunders](https://github.com/ctsa)
-
-## Early release warning
-Please note that HiPhase is still in early development. 
-We are still tweaking the input / output file formats and making changes that can affect the behavior of the program.
 
 ## Availability
 * [Latest release with binary](https://github.com/PacificBiosciences/HiPhase/releases/latest)

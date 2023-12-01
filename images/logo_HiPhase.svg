@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">
+  <defs>
+    <style>
+      .cls-1, .cls-2, .cls-3 {
+        stroke-width: 0px;
+      }
+
+      .cls-1, .cls-4 {
+        fill: none;
+      }
+
+      .cls-2 {
+        fill: url(#radial-gradient);
+      }
+
+      .cls-3 {
+        fill: #fff;
+        opacity: .2;
+      }
+
+      .cls-4 {
+        stroke: #fff;
+        stroke-miterlimit: 10;
+        stroke-width: 2px;
+      }
+    </style>
+    <radialGradient id="radial-gradient" cx="32" cy="32" fx="32" fy="32" r="21.9968" gradientTransform="translate(0 -.00465)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00b8c4"/>
+      <stop offset="1" stop-color="#1383c6"/>
+    </radialGradient>
+  </defs>
+  <rect class="cls-1" width="64" height="64"/>
+  <g>
+    <circle class="cls-2" cx="32" cy="32" r="21.9968"/>
+    <path class="cls-3" d="m16.44591,47.55635c-8.59028-8.59153-8.59028-22.52116,0-31.1127s22.51789-8.59153,31.10817,0l-31.10817,31.1127Z"/>
+    <line class="cls-4" x1="14.00262" y1="15.63796" x2="49.99738" y2="15.63796"/>
+    <line class="cls-4" x1="10" y1="21.28163" x2="54" y2="21.28163"/>
+    <line class="cls-4" x1="10" y1="26.9253" x2="54" y2="26.9253"/>
+    <g>
+      <line class="cls-4" x1="42.13809" y1="37.0779" x2="54" y2="37.0779"/>
+      <line class="cls-4" x1="10" y1="37.0779" x2="21.86191" y2="37.0779"/>
+      <line class="cls-4" x1="24.49949" y1="37.0779" x2="27.49266" y2="37.0779"/>
+      <line class="cls-4" x1="36.50734" y1="37.0779" x2="39.50051" y2="37.0779"/>
+      <line class="cls-4" x1="30.50342" y1="37.0779" x2="33.49658" y2="37.0779"/>
+    </g>
+    <g>
+      <line class="cls-4" x1="42.13809" y1="42.22117" x2="54" y2="42.22117"/>
+      <line class="cls-4" x1="10" y1="42.22117" x2="21.86191" y2="42.22117"/>
+      <line class="cls-4" x1="24.49949" y1="42.22117" x2="27.49266" y2="42.22117"/>
+      <line class="cls-4" x1="36.50734" y1="42.22117" x2="39.50051" y2="42.22117"/>
+      <line class="cls-4" x1="30.50342" y1="42.22117" x2="33.49658" y2="42.22117"/>
+    </g>
+    <g>
+      <line class="cls-4" x1="42.13809" y1="47.36444" x2="54" y2="47.36444"/>
+      <line class="cls-4" x1="10" y1="47.36444" x2="21.86191" y2="47.36444"/>
+      <line class="cls-4" x1="24.49949" y1="47.36444" x2="27.49266" y2="47.36444"/>
+      <line class="cls-4" x1="36.50734" y1="47.36444" x2="39.50051" y2="47.36444"/>
+      <line class="cls-4" x1="30.50342" y1="47.36444" x2="33.49658" y2="47.36444"/>
+    </g>
+  </g>
+</svg>
