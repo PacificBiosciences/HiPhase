@@ -2,7 +2,7 @@
 use hiphase::block_gen::{MultiPhaseBlockIterator, PhaseBlockIterator, get_vcf_samples, get_sample_bams};
 use hiphase::cli::{Settings,check_settings,get_raw_settings};
 use hiphase::data_types::reference_genome::ReferenceGenome;
-use hiphase::phaser::{HaplotagResult, PhaseResult, solve_block, singleton_block};
+use hiphase::phaser::{HaplotagResult, PhaseResult, solve_block, create_unphased_result};
 use hiphase::writers::block_stats::BlockStatsCollector;
 use hiphase::writers::haplotag_writer::HaplotagWriter;
 use hiphase::writers::ordered_bam_writer::OrderedBamWriter;
@@ -255,6 +255,7 @@ fn main() {
     
     // values related to printing
     const UPDATE_SPEED: u64 = 100;
+    info!("Phase block generation starting...");
 
     if cli_settings.threads <= 1 {
         for (i, block_result) in block_iterator.by_ref().enumerate().skip(skip_count).take(take_count) {
@@ -269,7 +270,7 @@ fn main() {
 
             // we likely need to separate out the phase result from the haplotag result
             let sample_bams = sample_to_bams.get(block.sample_name()).unwrap();
-            let (phase_result, haplotag_result): (PhaseResult, HaplotagResult) = if phase_singletons || block.get_num_variants() > 1 {
+            let (phase_result, haplotag_result): (PhaseResult, HaplotagResult) = if !block.unphased_block() && (phase_singletons || block.get_num_variants() > 1) {
                 match solve_block(
                     &block,
                     &cli_settings.vcf_filenames,
@@ -291,7 +292,7 @@ fn main() {
                     }
                 }
             } else {
-                singleton_block(&block)
+                create_unphased_result(&block)
             };
 
             // this is only for printing
@@ -365,7 +366,7 @@ fn main() {
                 info!("Generated {} phase blocks, latest block: {:?}", jobs_queued, block); 
             }
 
-            if phase_singletons || block.get_num_variants() > 1 {
+            if !block.unphased_block() && (phase_singletons || block.get_num_variants() > 1) {
                 let tx = tx.clone();
                 let arc_cli_settings = arc_cli_settings.clone();
                 let arc_reference_genome = arc_reference_genome.clone();
@@ -397,9 +398,9 @@ fn main() {
                     tx.send(all_results).expect("channel will be there waiting for the pool");
                 });
             } else {
-                // this is a singleton we can short-circuit here
+                // this is a unphased block we can short-circuit here
                 let (phase_result, haplotag_result): (PhaseResult, HaplotagResult) = 
-                    singleton_block(&block);
+                    create_unphased_result(&block);
                 
                 // this is only for printing
                 total_variants += phase_result.phase_block.get_num_variants() as u64;
@@ -450,6 +451,8 @@ fn main() {
             }
         }
     }
+
+    info!("All phase blocks analyzed, finalizing output files...");
 
     // if we are only doing partial files, this will not behave, so skip it
     if !debug_run {

@@ -570,7 +570,8 @@ pub fn solve_block(
         phase_problem.get_chrom().to_string(),
         phase_problem.get_chrom_index(),
         phase_problem.get_min_quality(),
-        phase_problem.sample_name().to_string()
+        phase_problem.sample_name().to_string(),
+        phase_problem.vcf_index_counts().len()
     );
     let mut current_tag = block_tags[0];
     for (i, variant) in variant_calls.iter().enumerate() {
@@ -587,7 +588,8 @@ pub fn solve_block(
                         phase_problem.get_chrom().to_string(), 
                         phase_problem.get_chrom_index(),
                         phase_problem.get_min_quality(),
-                        phase_problem.sample_name().to_string()
+                        phase_problem.sample_name().to_string(),
+                        phase_problem.vcf_index_counts().len()
                     );
                 }
 
@@ -644,33 +646,38 @@ pub fn solve_block(
     Ok((phase_result, haplotag_result))
 }
 
-/// This function generates a singleton "solution".
-/// It is boilerplate for an unsolved block because that block only has one variant, and we don't care to phase it.
+/// This function generates a dummy result for a block we are not phasing.
+/// It is boilerplate for an unsolved block, either because there is only one variant we do not wish to phase OR because there are no reads but there are variants.
+/// In either case, we will mark all the variant alleles as 2/2 to indicate unphased.
 /// # Arguments
 /// * `phase_problem` - the problem definition, primarily defines coordinates of the phase block we want to solve
-pub fn singleton_block(phase_problem: &PhaseBlock) -> (PhaseResult, HaplotagResult) {
-    debug!("Generating empty result for singleton: {phase_problem:?}");
-
-    // in downstream writing, the only thing that matters is the vcf_index, so make sure we set that correctly (knowing this is a singleton)
-    // everything else can be garbage
-    let dummy_variant = Variant::new_snv(
-        phase_problem.get_first_variant_vcf(),
-        phase_problem.get_start() as i64,
-        vec![0],
-        vec![1],
-        0,
-        1
-    );
+pub fn create_unphased_result(phase_problem: &PhaseBlock) -> (PhaseResult, HaplotagResult) {
+    debug!("Generating unphased result for block: {phase_problem:?}");
+    
+    // generate a vec with the appropriate number of variants from each VCF
     let num_variants = phase_problem.get_num_variants();
-    let variant_calls: Vec<Variant> = if num_variants == 0 { vec![] } else { vec![dummy_variant] };
+    let mut variant_calls: Vec<Variant> = vec![];
+    for (vcf_index, &vi_count) in phase_problem.vcf_index_counts().iter().enumerate() {
+        let dummy_variant = Variant::new_snv(
+            vcf_index,
+            phase_problem.get_start() as i64,
+            vec![0],
+            vec![1],
+            0,
+            1
+        );
+        variant_calls.extend(std::iter::repeat(dummy_variant).take(vi_count));
+    }
+
     assert_eq!(variant_calls.len(), num_variants);
     
-    // now we can make our dummy results
+    // now we can make our dummy results - 0/0 get left as an unphased het
+    // originally, this was 2/2, but that's a sentinel for TR_OVERLAP; we should make that more obvious in the future
     let phase_result: PhaseResult = PhaseResult {
         phase_block: phase_problem.clone(),
         variants: variant_calls,
-        haplotype_1: vec![2; num_variants],
-        haplotype_2: vec![2; num_variants],
+        haplotype_1: vec![0; num_variants],
+        haplotype_2: vec![0; num_variants],
         block_ids: vec![phase_problem.get_start() as usize; num_variants],
         sub_phase_blocks: vec![], // empty because this is not getting treated as a block
         read_statistics: None,

@@ -99,7 +99,7 @@ pub struct Settings {
     #[clap(help_heading = Some("Input/Output"))]
     pub haplotag_filename: Option<PathBuf>,
 
-    /// Number of threads for BAM I/O (default: copy `--threads`)
+    /// Number of threads for BAM I/O (default: minimum of `--threads` or `4`)
     #[clap(long = "io-threads")]
     #[clap(value_name = "THREADS")]
     #[clap(help_heading = Some("Input/Output"))]
@@ -311,7 +311,9 @@ pub fn check_settings(mut settings: Settings) -> Settings {
 
     // if this is not specified, then set it to the same as processing
     if settings.io_threads.is_none() {
-        settings.io_threads = Some(settings.threads);
+        // setting to the same as threads generates some issues with no real benefit
+        // 4 is a happy default, users can override if needed
+        settings.io_threads = Some(settings.threads.min(4));
     }
 
     // dump stuff to the logger
