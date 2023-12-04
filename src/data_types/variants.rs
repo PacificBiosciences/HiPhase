@@ -42,7 +42,7 @@ pub enum Zygosity {
 
 /// A variant definition structure.
 /// It currently assumes that chromosome is fixed and that the variant is a SNP.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Variant {
     /// The vcf index from the input datasets
     vcf_index: usize,

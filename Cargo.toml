@@ -1,8 +1,8 @@
 [package]
 name = "hiphase"
-version = "1.0.0"
+version = "1.1.0"
 authors = ["J. Matthew Holt <mholt@pacificbiosciences.com>"]
-description = "A tool for phasing HiFi VCF files."
+description = "A tool for jointly phasing small, structural, and tandem repeat variants for PacBio sequencing data"
 edition = "2021"
 license-file="LICENSE.md"
 

@@ -322,12 +322,14 @@ pub struct PhaseBlock {
     end: u64,
     /// The total number of variants in the block so far.
     num_variants: usize,
-    /// The VCF index of the first variant in the block
-    first_variant_vcf: usize,
+    /// The number of variants from each VCF in this block
+    vcf_index_counts: Vec<usize>,
     /// The minimum quality of variants that were included
     min_quality: i32,
     /// The sample name within the VCF that this block corresponds to
-    sample_name: String
+    sample_name: String,
+    /// if True, then the variants in this block are meant to be skipped and left unphased
+    unphased_block: bool
 }
 
 impl std::fmt::Debug for PhaseBlock {
@@ -354,7 +356,8 @@ impl PhaseBlock {
     /// * `chrom_index` - the chromosome index in the VCF file, for ordering
     /// * `min_quality` - the minimum quality to include a variant in this phase block
     /// * `sample_name` - the name of the sample in the VCF(s) that this block info corresponds to 
-    pub fn new(block_index: usize, chrom: String, chrom_index: u32, min_quality: i32, sample_name: String) -> PhaseBlock {
+    /// * `num_vcfs` - the number of VCFs, used to generate initial empty counts Vec
+    pub fn new(block_index: usize, chrom: String, chrom_index: u32, min_quality: i32, sample_name: String, num_vcfs: usize) -> PhaseBlock {
         PhaseBlock {
             block_index,
             chrom,
@@ -362,9 +365,10 @@ impl PhaseBlock {
             start: 0,
             end: 0,
             num_variants: 0,
-            first_variant_vcf: 0,
+            vcf_index_counts: vec![0; num_vcfs],
             min_quality,
-            sample_name
+            sample_name,
+            unphased_block: false
         }
     }
 
@@ -396,8 +400,8 @@ impl PhaseBlock {
         self.num_variants
     }
 
-    pub fn get_first_variant_vcf(&self) -> usize {
-        self.first_variant_vcf
+    pub fn vcf_index_counts(&self) -> &[usize] {
+        &self.vcf_index_counts
     }
 
     pub fn get_min_quality(&self) -> i32 {
@@ -411,6 +415,14 @@ impl PhaseBlock {
 
     pub fn sample_name(&self) -> &str {
         &self.sample_name
+    }
+
+    pub fn set_unphased_block(&mut self) {
+        self.unphased_block = true;
+    }
+    
+    pub fn unphased_block(&self) -> bool {
+        self.unphased_block
     }
 
     /// Add a single-position variant to the phase block, will panic if the chromosome does not match
@@ -429,10 +441,7 @@ impl PhaseBlock {
             self.end = pos;
         }
         self.num_variants += 1;
-
-        if self.num_variants == 1 {
-            self.first_variant_vcf = vcf_index;
-        }
+        self.vcf_index_counts[vcf_index] += 1;
     }
 
     /// Checks if a given start/end overlaps the existing phase block
@@ -640,13 +649,59 @@ impl PhaseBlockIterator {
         }
 
         if span_list.len() < self.min_spanning_reads {
-            // we don't have enough reads to reach our minimum threshold, so return this position+1
-            // the +1 is because we are returning the end of a half-open range that only includes pos
-            pos + 1
+            // this is a sentinel indicating that the range is effectively empty
+            pos
         } else {
             span_list.sort();
             span_list[span_list.len() - self.min_spanning_reads]
         }
+    }
+
+    /// Returns the next position after `pos` such that _at least_ `min_read_count` reads have been found.
+    /// # Arguments
+    /// * `chrom` - the chromosome of the locus
+    /// * `pos` - the position of the locus
+    fn get_next_mapped(&self, chrom: &str, pos: u64) -> u64 {
+        use rust_htslib::bam::Read;
+
+        // TODO: This method may over-generate blocks when a user uses something other than `min_read_count = 1`.
+        //       If this becomes an issue, we will likely need to rework this code a little bit to read the cigar.
+        
+        let mut next_positions: Vec<i64> = vec![];
+        // iterate over each bam, we will cache the next `min_read_count` positions for each BAM
+        for bam_ref in self.bam_readers.iter() {
+            let mut bam = bam_ref.borrow_mut();
+            bam.fetch((chrom, pos, i64::MAX)).unwrap();
+            let mut counted: usize = 0;
+            
+            // calling .records() is what is triggering the URL warning
+            for read_entry in bam.records() {
+                let read = read_entry.unwrap();
+                
+                //make sure we care about the alignment
+                if filter_out_alignment_record(&read, self.min_mapq) {
+                    continue;
+                }
+                
+                let start_position: i64 = read.pos();
+                next_positions.push(start_position);
+                counted += 1;
+                if counted >= self.min_spanning_reads {
+                    // we found enough reads from this BAM
+                    break;
+                }
+            }
+        }
+
+        if next_positions.len() >= self.min_spanning_reads {
+            // we found enough reads, sort them by position, then return the one at the correct location
+            next_positions.sort();
+            next_positions[self.min_spanning_reads-1] as u64
+        } else {
+            // we did not find enough reads on the rest of the chromosome, so return the max
+            u64::MAX
+        }
+
     }
 
     /// Returns true if there are at least `min_read_count` reads that connect from the given position back into the current phase block.
@@ -749,7 +804,8 @@ impl Iterator for PhaseBlockIterator {
 
             // initialize with an empty block containing just this chromosome
             let mut phase_block: PhaseBlock = PhaseBlock::new(
-                self.next_block_index, chrom_name.clone(), self.chrom_index, self.min_quality, self.sample_name.clone()
+                self.next_block_index, chrom_name.clone(), self.chrom_index, self.min_quality, self.sample_name.clone(),
+                self.ref_vcf_readers.len()
             );
             self.next_block_index += 1;
             
@@ -795,6 +851,7 @@ impl Iterator for PhaseBlockIterator {
 
             let mut previous_pos: u64 = 0;
             let mut max_span: u64 = 0;
+            let mut next_valid_read_pos: u64 = 0;
 
             while !variant_queue.is_empty() {
                 // get the source of the next variant to process
@@ -823,15 +880,38 @@ impl Iterator for PhaseBlockIterator {
                     // second condition is for variants that overlap but are before our start position
                     if include_variant {
                         //heterozygous variant found
-                        if phase_block.get_num_variants() == 0 || max_span > variant_pos {
-                            //either:
-                            //1 - this is a new block OR
-                            //2 - we already found enough reads that spans _past_ this variant
+                        if phase_block.get_num_variants() == 0 {
+                            //this is a new block, first add the variant
                             phase_block.add_locus_variant(&chrom_name, variant_pos, pop_index);
+                            
+                            // go ahead and run the max span calculation
+                            max_span = self.get_longest_multispan(&chrom_name, variant_pos);
+                            if max_span == variant_pos {
+                                // there are not enough reads overlapping this position, it will be unphased
+                                phase_block.set_unphased_block();
+                                next_valid_read_pos = self.get_next_mapped(&chrom_name, variant_pos);
+
+                                // this just insures than any overlapping variants get in to match previous run pattern
+                                max_span += 1;
+                            }
+                        }
+                        else if max_span > variant_pos {
+                            // we already found enough reads that spans _past_ this variant, so just add it
+                            phase_block.add_locus_variant(&chrom_name, variant_pos, pop_index);
+                        } else if phase_block.unphased_block() {
+                            // if we get here, we are using logic for an unphased phase block
+                            if variant_pos < next_valid_read_pos {
+                                // this variant is before the next valid read, so it's automatically unphased as well
+                                phase_block.add_locus_variant(&chrom_name, variant_pos, pop_index);
+                            } else {
+                                // this variant potentially has reads to use, so we return our unphased block
+                                self.chrom_position = variant_pos;
+                                return Some(Ok(phase_block));
+                            }
                         } else {
                             //we check the reads from the most recent locus
-                            //max_span = self.get_longest_span(&chrom_name, previous_pos);
                             max_span = self.get_longest_multispan(&chrom_name, previous_pos);
+                            assert!(max_span != previous_pos);
                             if max_span > variant_pos {
                                 //new max span connects
                                 phase_block.add_locus_variant(&chrom_name, variant_pos, pop_index);

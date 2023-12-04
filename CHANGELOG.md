@@ -1,3 +1,13 @@
+# v1.1.0
+## Changes
+- Updated the way unphaseable variants are placed into artificial phase blocks. Instead of unphased singletons, these are now grouped into larger unphased blocks. Phased variants are unaffected by this change.
+  - This has a major impact on I/O churning, especially in centromeric and telomeric regions. Internal tests show up to 60% reduction in wall clock time with 16 threads accompanied by up to 30% reduction in CPU time depending on the phasing mode.
+  - There are now fewer total phase blocks reported due to the singleton collapse. This primarily impacts the statistic tracking optional outputs of HiPhase.
+
+## Fixed
+- Fixed a related issue where unphased singleton blocks were falsely tagged with `TR_OVERLAP`
+- Fixed an issue where the default `--io-threads` frequently caused issues on long-running jobs. This now defaults to `min(--threads, 4)`, but can still be specified with `--io-threads`.
+
 # v1.0.0
 ## Changes
 - Added support for tandem repeat calls from [TRGT](https://github.com/PacificBiosciences/trgt); minimum supported version - v0.5.0
