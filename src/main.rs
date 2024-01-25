@@ -245,6 +245,17 @@ fn main() {
         }
     };
 
+    // check if the proper indexing is enabled; tbi/bai go up to 2**29 - 1 before bailing
+    let max_chrom_len = reference_genome.contig_keys().iter()
+        .map(|k| reference_genome.get_full_chromosome(k).len())
+        .max()
+        .unwrap_or_default();
+    let csi_required = max_chrom_len > (2_usize.pow(29) - 1);
+    if csi_required && !cli_settings.csi_index {
+        error!("Output files will require .csi indexing ({max_chrom_len} > 2^29 - 1); use --csi-index to enable");
+        std::process::exit(exitcode::USAGE);
+    }
+
     // we have to do this because we need access to the reference genome later also
     let arc_reference_genome: Arc<ReferenceGenome> = Arc::new(reference_genome);
 
@@ -469,7 +480,7 @@ fn main() {
     // now we drop the VCF writer, this is to close out all the VCF files before indexing
     std::mem::drop(vcf_writer);
     for vcf_fn in cli_settings.output_vcf_filenames.iter() {
-        match build_bcf_index(vcf_fn, None, cli_settings.threads as u32, true) {
+        match build_bcf_index(vcf_fn, None, cli_settings.threads as u32, !cli_settings.csi_index) {
             Ok(()) => {
                 info!("Finished building index for {:?}.", vcf_fn);
             },
@@ -509,10 +520,15 @@ fn main() {
 
         // index the BAM files with .bai files
         for bam_fn in cli_settings.output_bam_filenames.iter() {
+            let idx_type = if cli_settings.csi_index {
+                rust_htslib::bam::index::Type::Csi(14)  
+            } else {
+                rust_htslib::bam::index::Type::Bai
+            };
             match rust_htslib::bam::index::build(
                 bam_fn,
                 None,
-                rust_htslib::bam::index::Type::Bai,
+                idx_type,
                 cli_settings.threads as u32
             ) {
                 Ok(()) => {
