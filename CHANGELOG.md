@@ -1,3 +1,8 @@
+# v1.2.0
+## Changes
+- Added an option (`--csi-index`) to output .csi index files instead of .tbi/.bai
+- HiPhase will now generate an error if it detects a large reference chromosome and .csi indexing is not enabled
+
 # v1.1.0
 ## Changes
 - Updated the way unphaseable variants are placed into artificial phase blocks. Instead of unphased singletons, these are now grouped into larger unphased blocks. Phased variants are unaffected by this change.

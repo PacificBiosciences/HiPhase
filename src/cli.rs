@@ -105,6 +105,11 @@ pub struct Settings {
     #[clap(help_heading = Some("Input/Output"))]
     pub io_threads: Option<usize>,
 
+    /// Output .csi indices instead of .tbi/.bai
+    #[clap(long = "csi-index")]
+    #[clap(help_heading = Some("Input/Output"))]
+    pub csi_index: bool,
+
     /// Number of threads to use for phasing.
     #[clap(short = 't')]
     #[clap(long = "threads")]
@@ -339,6 +344,9 @@ pub fn check_settings(mut settings: Settings) -> Settings {
     }
     info!("Processing threads: {}", settings.threads);
     info!("I/O threads: {}", settings.io_threads.unwrap());
+    if settings.csi_index {
+        info!("CSI indexing: enabled");
+    }
 
     //send the settings back
     settings
