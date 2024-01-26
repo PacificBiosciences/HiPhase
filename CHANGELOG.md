@@ -1,3 +1,8 @@
+# v1.2.1
+## Fixed
+- Fixed [a rare issue](https://github.com/PacificBiosciences/pbbioconda/issues/640) where reference alleles with stripped IUPAC codes were throwing errors due to reference mismatch
+- Fixed an issue where variants preceding a GraphWFA region were not ignored, potentially leading to aberrant graph structure
+
 # v1.2.0
 ## Changes
 - Added an option (`--csi-index`) to output .csi index files instead of .tbi/.bai
