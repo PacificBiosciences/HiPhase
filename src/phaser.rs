@@ -239,13 +239,26 @@ fn load_variant_calls(
                     // that users do crazy things, so we need to convert it to a full Error
                     let ref_sequence = reference_genome.get_slice(region.get_chrom(), position as usize, ref_postfix_start);
                     if all_alleles[0] != ref_sequence {
-                        bail!(
-                            "Reference mismatch error: variant at {}:{} has REF allele = \"{}\", but reference genome has \"{}\".",
-                            region.get_chrom(), position+1, 
-                            // we don't want to panic in the middle of this, so use a safe unwrapper with default
-                            std::str::from_utf8(all_alleles[0]).unwrap_or("utf8 decode error"), 
-                            std::str::from_utf8(ref_sequence).unwrap_or("utf8 decode error")
-                        );
+                        // check there are IUPAC in the reference 
+                        let iupac_filter_ref_sequence: Vec<u8> = ref_sequence.iter()
+                            .map(|&c| {
+                                match c {
+                                    b'A' | b'C' | b'G' | b'T' => c,
+                                    _ => b'N'
+                                }
+                            }).collect();
+                        if all_alleles[0] != iupac_filter_ref_sequence {
+                            bail!(
+                                "Reference mismatch error: variant at {}:{} has REF allele = \"{}\", but reference genome has \"{}\".",
+                                region.get_chrom(), position+1, 
+                                // we don't want to panic in the middle of this, so use a safe unwrapper with default
+                                std::str::from_utf8(all_alleles[0]).unwrap_or("utf8 decode error"), 
+                                std::str::from_utf8(ref_sequence).unwrap_or("utf8 decode error")
+                            );
+                        } else {
+                            // this is a case where a non-ACGT was replaced with N, so allow it
+                            // debug!("IUPAC match");
+                        }
                     }
 
                     // check if this variant is too close to the previous variant
@@ -799,5 +812,37 @@ mod tests {
         assert!(!haplotag_result.contains_key("r3")); // equal to both, so unassigned
         assert_eq!(haplotag_result.get("r4").unwrap(), &(3, 1)); // spans two blocks and is inexact, but closer to hap 1 starting with block 3
         assert_eq!(haplotag_result.get("r2").unwrap(), &(3, 1)); // equal by alleles, but qual on allele 1 is higher
+    }
+
+    // tests that having a IUPAC code modified to "N" is okay
+    #[test]
+    fn test_iupac_conversion() {
+        // create a single variant block for simplicity
+        let mut phase_block = PhaseBlock::new(0, "chr1".to_string(), 0, 20, "sample_name".to_string(), 1);
+        phase_block.add_locus_variant("chr1", 4, 0);
+
+        // load it up
+        let vcf_path = PathBuf::from("./test_data/iupac_test/small_variants.vcf.gz");
+        let ref_fn = PathBuf::from("./test_data/iupac_test/test_reference.fa");
+        let reference_genome = ReferenceGenome::from_fasta(&ref_fn).unwrap();
+        let reference_buffer = 2;
+        let is_hom_allowed = false;
+        let (het_variants, hom_variants) = load_variant_calls(
+            &phase_block,
+            &[vcf_path],
+            &reference_genome,
+            reference_buffer,
+            is_hom_allowed
+        ).unwrap();
+
+        // we should just have the one variant in the block with the translated IUPAC code
+        let mut expected_variant = Variant::new_indel(0, 4, 4, b"ANGT".to_vec(), b"AT".to_vec(), 0, 1);
+        expected_variant.add_reference_prefix(b"GT");
+        expected_variant.add_reference_postfix(b"AC");
+        
+        assert_eq!(het_variants, vec![
+            expected_variant
+        ]);
+        assert!(hom_variants.is_empty());
     }
 }

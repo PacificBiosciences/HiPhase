@@ -132,6 +132,11 @@ impl WFAGraph {
             // look at where this variant is
             let variant_pos: usize = variant.position() as usize;
             let ref_len: usize = variant.get_ref_len();
+            if variant_pos < ref_start {
+                // this variant starts before our reference block, so ignore it
+                trace!("Ignoring variant starting at {} before ref_start {}", variant_pos, ref_start);
+                continue;
+            }
             if variant_pos + ref_len > ref_end {
                 // this variant end after our reference block, so ignore it
                 trace!("Ignoring variant ending at {} after ref_end {}", variant_pos+ref_len, ref_end);
@@ -1062,6 +1067,31 @@ mod tests {
     // After here are mostly edge case bug tests
     ////////////////////////////////////////////////////////////////////////////////
     
+    // tests when a variant starts before the provided reference, we should ignore it basically
+    #[test]
+    fn test_variant_before_start() {
+        // the first 10 bases are ignored here "NNNNNNNNNA"
+        let reference = "NNNNNNNNNAACGTA".as_bytes();
+        let ref_start: usize = 10;
+        // the first one should be ignored, the second one included
+        let variants = vec![
+            // vcf_index, position, allele0, allele1, index_allele0, index_allele1
+            Variant::new_snv(0, (ref_start-1) as i64, "A".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1),
+            Variant::new_snv(0, ref_start as i64, "A".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1)
+        ];
+
+        let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
+            WFAGraph::from_reference_variants(&reference, &variants, ref_start, reference.len()).unwrap();
+        
+        // check the alignments first
+        assert_eq!(graph.get_num_nodes(), 4);
+
+        // now check our lookup tables
+        assert_eq!(*node_to_alleles.get(&0).unwrap_or(&vec![]), vec![]); // first node is empty
+        assert_eq!(*node_to_alleles.get(&1).unwrap_or(&vec![]), vec![(1, 1)]); // second is the alternate for the SECOND variant (first variant is ignored)
+        assert_eq!(*node_to_alleles.get(&2).unwrap_or(&vec![]), vec![(1, 0)]); // third is the reference for the SECOND variant
+        assert_eq!(*node_to_alleles.get(&3).unwrap_or(&vec![]), vec![]); // last is just more reference
+    }
 
     // tests when a variant goes past the provided reference, we should ignore it basically
     #[test]
