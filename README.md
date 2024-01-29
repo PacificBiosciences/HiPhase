@@ -29,7 +29,11 @@ Authors: [Matt Holt](https://github.com/holtjma), [Chris Saunders](https://githu
 * [Performance](docs/performance.md)
 
 ## Citation
-If you use HiPhase, please cite our pre-print:
+If you use HiPhase, please cite our publication:
+
+[Holt, J. M., Saunders, C. T., Rowell, W. J., Kronenberg, Z., Wenger, A. M., & Eberle, M. (2024). HiPhase: Jointly phasing small, structural, and tandem repeat variants from HiFi sequencing. Bioinformatics, btae042.](https://doi.org/10.1093/bioinformatics/btae042)
+
+Original BioRxiv pre-print:
 
 [Holt, J. M., Saunders, C. T., Rowell, W. J., Kronenberg, Z., Wenger, A. M., & Eberle, M. (2023). HiPhase: Jointly phasing small and structural variants from HiFi sequencing. _bioRxiv_, 2023-05.](https://doi.org/10.1101/2023.05.03.539241)
 
