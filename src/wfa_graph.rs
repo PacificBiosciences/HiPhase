@@ -821,7 +821,7 @@ mod tests {
     #[test]
     fn test_simple_snv() {
         let reference = "AAA".as_bytes();
-        let variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1)];
+        let variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
             WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
@@ -846,8 +846,8 @@ mod tests {
         let reference = "AAAAA".as_bytes();
         let variants = vec![
             // vcf_index, position, allele0, allele1, index_allele0, index_allele1
-            Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1),
-            Variant::new_snv(0, 3, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1)
+            Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, 3, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
@@ -886,8 +886,8 @@ mod tests {
         let reference = "ACGTA".as_bytes();
         let variants = vec![
             // vcf_index, position, ref_len, allele0, allele1, index_allele0, index_allele1
-            Variant::new_deletion(0, 1, 2, "CG".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1),
-            Variant::new_deletion(0, 2, 2, "GT".as_bytes().to_vec(), "G".as_bytes().to_vec(), 0, 1)
+            Variant::new_deletion(0, 1, 2, "CG".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap(),
+            Variant::new_deletion(0, 2, 2, "GT".as_bytes().to_vec(), "G".as_bytes().to_vec(), 0, 1).unwrap()
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
@@ -925,8 +925,8 @@ mod tests {
         let reference = "ACGTA".as_bytes();
         let variants = vec![
             // vcf_index, position, allele0, allele1, index_allele0, index_allele1
-            Variant::new_insertion(0, 2, "G".as_bytes().to_vec(), "GT".as_bytes().to_vec(), 0, 1),
-            Variant::new_insertion(1, 2, "G".as_bytes().to_vec(), "GT".as_bytes().to_vec(), 0, 1)
+            Variant::new_insertion(0, 2, "G".as_bytes().to_vec(), "GT".as_bytes().to_vec(), 0, 1).unwrap(),
+            Variant::new_insertion(1, 2, "G".as_bytes().to_vec(), "GT".as_bytes().to_vec(), 0, 1).unwrap()
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
@@ -958,7 +958,7 @@ mod tests {
         let reference = "ACGTA".as_bytes();
         let variants = vec![
             // vcf_index, position, ref_len, allele0, allele1, index_allele0, index_allele1
-            Variant::new_indel(0, 2, 2, "G".as_bytes().to_vec(), "GTT".as_bytes().to_vec(), 1, 2)
+            Variant::new_indel(0, 2, 2, "G".as_bytes().to_vec(), "GTT".as_bytes().to_vec(), 1, 2).unwrap()
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
@@ -991,7 +991,9 @@ mod tests {
         // we prepended and appended "AA" to the basic SNV test
         let reference = "AAAAAAA".as_bytes();
         // variant coordinate shifted +2
-        let variants = vec![Variant::new_snv(0, 3, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1)];
+        let variants = vec![
+            Variant::new_snv(0, 3, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()
+        ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
             WFAGraph::from_reference_variants(&reference, &variants, 2, reference.len()-2).unwrap();
@@ -1016,12 +1018,12 @@ mod tests {
         let variants = vec![
             // vcf_index, position, ref_len, allele0, allele1, index_allele0, index_allele1
             // 3: GTTG>G
-            Variant::new_deletion(0, 3, 4, "GTTG".as_bytes().to_vec(), "G".as_bytes().to_vec(), 0, 1),
+            Variant::new_deletion(0, 3, 4, "GTTG".as_bytes().to_vec(), "G".as_bytes().to_vec(), 0, 1).unwrap(),
             // 4: TT>T
-            Variant::new_deletion(0, 4, 2, "TT".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1),
+            Variant::new_deletion(0, 4, 2, "TT".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1).unwrap(),
             // vcf_index, position, allele0, allele1, index_allele0, index_allele1
             // 6: G>[A,C]
-            Variant::new_snv(0, 6, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 1, 2)
+            Variant::new_snv(0, 6, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 1, 2).unwrap()
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
@@ -1076,8 +1078,8 @@ mod tests {
         // the first one should be ignored, the second one included
         let variants = vec![
             // vcf_index, position, allele0, allele1, index_allele0, index_allele1
-            Variant::new_snv(0, (ref_start-1) as i64, "A".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1),
-            Variant::new_snv(0, ref_start as i64, "A".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1)
+            Variant::new_snv(0, (ref_start-1) as i64, "A".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, ref_start as i64, "A".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1).unwrap()
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
@@ -1100,7 +1102,7 @@ mod tests {
         let reference = "ACGTA".as_bytes();
         let variants = vec![
             // vcf_index, position, ref_len, allele0, allele1, index_allele0, index_allele1
-            Variant::new_deletion(0, 3, 3, "TAG".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1)
+            Variant::new_deletion(0, 3, 3, "TAG".as_bytes().to_vec(), "T".as_bytes().to_vec(), 0, 1).unwrap()
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
@@ -1117,8 +1119,8 @@ mod tests {
     fn test_hom_variants() {
         // add a hom variant at base 1; these can be traversed, but provide no index lookup because they are not a "variant"
         let reference = "AAAAA".as_bytes();
-        let variants = vec![Variant::new_snv(0, 3, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1)];
-        let hom_variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1)];
+        let variants = vec![Variant::new_snv(0, 3, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
+        let hom_variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
             WFAGraph::from_reference_variants_with_hom(&reference, &variants, &hom_variants, 0, reference.len()).unwrap();
@@ -1144,7 +1146,7 @@ mod tests {
     #[test]
     fn test_variant_at_start() {
         let reference = "AAA".as_bytes();
-        let variants = vec![Variant::new_snv(0, 0, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1)];
+        let variants = vec![Variant::new_snv(0, 0, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
             WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
@@ -1166,7 +1168,7 @@ mod tests {
     #[test]
     fn test_variant_at_end() {
         let reference = "AAA".as_bytes();
-        let variants = vec![Variant::new_snv(0, 2, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1)];
+        let variants = vec![Variant::new_snv(0, 2, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
             WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();

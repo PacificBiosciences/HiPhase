@@ -1,3 +1,13 @@
+# v1.3.0
+## Changes
+- Relaxes the requirements for SV deletion and insertion events such that they no longer require an alternate or reference allele, respectively, to have length 1
+
+## Internal changes
+- The interface for variant creation was modified to reduce panics from invalid variant construction. This modification changes all the return types for the various `Variant::new*(...)` functions from `Variant` to `Result<Variant, VariantError>`.
+
+## Fixed
+- SV events with a placeholder ALT sequence (e.g., \<DEL\>, \<INS\>) are now properly ignored by HiPhase instead of creating an error.
+
 # v1.2.1
 ## Fixed
 - Fixed [a rare issue](https://github.com/PacificBiosciences/pbbioconda/issues/640) where reference alleles with stripped IUPAC codes were throwing errors due to reference mismatch
