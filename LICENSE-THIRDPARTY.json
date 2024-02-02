@@ -496,7 +496,7 @@
   },
   {
     "name": "hiphase",
-    "version": "1.2.1",
+    "version": "1.3.0",
     "authors": "J. Matthew Holt <mholt@pacificbiosciences.com>",
     "repository": null,
     "license": null,
@@ -910,7 +910,7 @@
   },
   {
     "name": "proc-macro2",
-    "version": "1.0.58",
+    "version": "1.0.78",
     "authors": "David Tolnay <dtolnay@gmail.com>|Alex Crichton <alex@alexcrichton.com>",
     "repository": "https://github.com/dtolnay/proc-macro2",
     "license": "Apache-2.0 OR MIT",
@@ -928,7 +928,7 @@
   },
   {
     "name": "quote",
-    "version": "1.0.27",
+    "version": "1.0.35",
     "authors": "David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/dtolnay/quote",
     "license": "Apache-2.0 OR MIT",
@@ -1161,6 +1161,15 @@
     "description": "Parser for Rust source code"
   },
   {
+    "name": "syn",
+    "version": "2.0.48",
+    "authors": "David Tolnay <dtolnay@gmail.com>",
+    "repository": "https://github.com/dtolnay/syn",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Parser for Rust source code"
+  },
+  {
     "name": "termcolor",
     "version": "1.1.3",
     "authors": "Andrew Gallant <jamslam@gmail.com>",
@@ -1171,7 +1180,7 @@
   },
   {
     "name": "thiserror",
-    "version": "1.0.37",
+    "version": "1.0.56",
     "authors": "David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/dtolnay/thiserror",
     "license": "Apache-2.0 OR MIT",
@@ -1180,7 +1189,7 @@
   },
   {
     "name": "thiserror-impl",
-    "version": "1.0.37",
+    "version": "1.0.56",
     "authors": "David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/dtolnay/thiserror",
     "license": "Apache-2.0 OR MIT",

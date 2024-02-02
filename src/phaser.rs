@@ -173,7 +173,7 @@ fn load_variant_calls(
                 let allele0: Vec<u8> = all_alleles[index_allele0 as usize].to_vec();
                 let allele1: Vec<u8> = all_alleles[index_allele1 as usize].to_vec();
 
-                let mut new_variant = match variant_type {
+                let new_variant_result = match variant_type {
                     VariantType::Snv => {
                         Variant::new_snv(
                             pop_index, position, allele0, allele1, index_allele0, index_allele1
@@ -207,7 +207,7 @@ fn load_variant_calls(
                     },
                     VariantType::SvInsertion => {
                         Variant::new_sv_insertion(
-                            pop_index, position, allele0, allele1, index_allele0, index_allele1
+                            pop_index, position, ref_len, allele0, allele1, index_allele0, index_allele1
                         )
                     },
                     VariantType::TandemRepeat => {
@@ -223,6 +223,13 @@ fn load_variant_calls(
                     VariantType::Unknown => {
                         // panic here because we shouldn't allow these types unless we implement the variant
                         panic!("no impl for {variant_type:?}");
+                    }
+                };
+
+                let mut new_variant = match new_variant_result {
+                    Ok(nv) => nv,
+                    Err(e) => {
+                        bail!("Error processing variant in VCF#{pop_index} at {}:{} : {e}", region.get_chrom(), position+1);
                     }
                 };
 
@@ -678,7 +685,7 @@ pub fn create_unphased_result(phase_problem: &PhaseBlock) -> (PhaseResult, Haplo
             vec![1],
             0,
             1
-        );
+        ).unwrap();
         variant_calls.extend(std::iter::repeat(dummy_variant).take(vi_count));
     }
 
@@ -836,7 +843,7 @@ mod tests {
         ).unwrap();
 
         // we should just have the one variant in the block with the translated IUPAC code
-        let mut expected_variant = Variant::new_indel(0, 4, 4, b"ANGT".to_vec(), b"AT".to_vec(), 0, 1);
+        let mut expected_variant = Variant::new_indel(0, 4, 4, b"ANGT".to_vec(), b"AT".to_vec(), 0, 1).unwrap();
         expected_variant.add_reference_prefix(b"GT");
         expected_variant.add_reference_postfix(b"AC");
         

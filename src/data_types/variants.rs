@@ -15,9 +15,9 @@ pub enum VariantType {
     Deletion,
     /// REF and ALT lengths > 1
     Indel,
-    /// Must have two alleles and be tagged with SVTYPE=INS
+    /// Must have two alleles and be tagged with SVTYPE=INS; ALT >= REF
     SvInsertion,
-    /// Must have two alleles and be tagged with SVTYPE=DEL
+    /// Must have two alleles and be tagged with SVTYPE=DEL; ALT <= REF
     SvDeletion,
     /// Must have two alleles and be tagged with SVTYPE=DUP
     SvDuplication,
@@ -38,6 +38,26 @@ pub enum Zygosity {
     Heterozygous,
     HomozygousAlternate,
     Unknown // make sure Unknown is always the last one in the list
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum VariantError {
+    #[error("allele0 length must match reference length when index_allele0=0")]
+    Allele0RefLen,
+    #[error("allele{index} must be length 1")]
+    AlleleLen1{ index: usize },
+    #[error("allele{index} is empty (length = 0)")]
+    EmptyAllele{ index: usize },
+    #[error("index_allele0 must be < index_allele1")]
+    IndexAlleleOrder,
+    #[error("{variant_type:?} does not support multi-allelic sites")]
+    MultiAllelicNotAllowed { variant_type: VariantType },
+    #[error("reference must have length > 1")]
+    RefLenGT1,
+    #[error("SV deletion ALT length must be <= REF length")]
+    SvDeletionLen,
+    #[error("SV insertion ALT length must be >= REF length")]
+    SvInsertionLen
 }
 
 /// A variant definition structure.
@@ -85,14 +105,21 @@ impl Variant {
     /// # Panics
     /// * if `index_allele0 > index_allele1`
     /// * if the provided sequences do not match a single-nucleotide variant
-    pub fn new_snv(vcf_index: usize, position: i64, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Variant {
+    pub fn new_snv(vcf_index: usize, position: i64, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Result<Variant, VariantError> {
         // we always assume alleles come "sorted" and they are heterozygous
-        assert!(index_allele0 < index_allele1);
-        
+        if index_allele0 >= index_allele1 {
+            return Err(VariantError::IndexAlleleOrder);
+        }
+
         // SNV alleles must be length 1
-        assert_eq!(allele0.len(), 1);
-        assert_eq!(allele1.len(), 1);
-        Variant {
+        if allele0.len() != 1 {
+            return Err(VariantError::AlleleLen1 { index: 0 });
+        }
+        if allele1.len() != 1 {
+            return Err(VariantError::AlleleLen1 { index: 1 });
+        }
+
+        Ok(Variant {
             vcf_index,
             variant_type: VariantType::Snv,
             position,
@@ -104,7 +131,7 @@ impl Variant {
             index_allele0,
             index_allele1,
             is_ignored: false
-        }
+        })
     }
 
     /// Creates a new deletion variant.
@@ -121,25 +148,35 @@ impl Variant {
     /// * if `index_allele0 > index_allele1`
     /// * if the provided sequences do not match a deletion variant
     /// * if the reference allele is passed in and it does not have the same length as `ref_len`
-    pub fn new_deletion(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Variant {
+    pub fn new_deletion(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Result<Variant, VariantError> {
         // we always assume alleles come "sorted" and they are heterozygous
-        assert!(index_allele0 < index_allele1);
+        if index_allele0 >= index_allele1 {
+            return Err(VariantError::IndexAlleleOrder);
+        }
         
         // reference length must be greater than 1 to be a deletion
-        assert!(ref_len > 1);
+        if ref_len <= 1 {
+            return Err(VariantError::RefLenGT1);
+        }
         
         if index_allele0 == 0 {
             // this allele is also the reference allele
-            assert_eq!(allele0.len(), ref_len);
+            if allele0.len() != ref_len {
+                return Err(VariantError::Allele0RefLen);
+            }
         } else {
             // this allele is not the reference, must be a multi-allelic site; but all deletion alts have len = 1
-            assert!(allele0.len() == 1);
+            if allele0.len() != 1 {
+                return Err(VariantError::AlleleLen1 { index: 0 });
+            }
         }
+
         // this one must always be length 1
-        assert!(allele1.len() == 1);
+        if allele1.len() != 1{
+            return Err(VariantError::AlleleLen1 { index: 1 });
+        }
         
         // make sure the alleles start with the same thing
-        // assert_eq!(allele0[0], allele1[0]);
         if allele0[0] != allele1[0] {
             /*
             Counter example to requiring alleleX[0] be equal; this is rare, but it does seem to happen
@@ -147,7 +184,7 @@ impl Variant {
             */
             trace!("Deletion alleles are unexpected: {position}, {ref_len}, {allele0:?}, {allele1:?}");
         }
-        Variant {
+        Ok(Variant {
             vcf_index,
             variant_type: VariantType::Deletion,
             position,
@@ -159,7 +196,7 @@ impl Variant {
             index_allele0,
             index_allele1,
             is_ignored: false
-        }
+        })
     }
 
     /// Creates a new insertion variant.
@@ -174,28 +211,36 @@ impl Variant {
     /// # Panics
     /// * if `index_allele0 > index_allele1`
     /// * if the provided sequences do not match an insertion variant
-    pub fn new_insertion(vcf_index: usize, position: i64, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Variant {
+    pub fn new_insertion(vcf_index: usize, position: i64, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Result<Variant, VariantError> {
         // we always assume alleles come "sorted" and they are heterozygous
-        assert!(index_allele0 < index_allele1);
+        if index_allele0 >= index_allele1 {
+            return Err(VariantError::IndexAlleleOrder);
+        }
         
         if index_allele0 == 0 {
             // if reference allele is present, it must be length 1 for this type
-            assert_eq!(allele0.len(), 1);
+            if allele0.len() != 1 {
+                return Err(VariantError::AlleleLen1 { index: 0 });
+            }
         } else {
             // allele0 isn't reference, so it must be >= 1 due to multi-allelics
             //     chr1	2122634	.	T	C,TG	14.1
-            assert!(!allele0.is_empty(), "{position} {allele0:?}");
+            if allele0.is_empty() {
+                return Err(VariantError::EmptyAllele { index: 0 });
+            }
         }
         // we have to do >= because of some multi-allelics:
         //     chr1	286158	.	A	ATG,G	34.4
-        assert!(!allele1.is_empty(), "{position} {allele1:?}");
+        if allele1.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 1 });
+        }
 
         // make sure the alleles start with the same thing
         if allele0[0] != allele1[0] {
             // no counter example searched for yet, but probably exists, we'll leave this trace for now
             trace!("Insertion alleles are unexpected: {position}, 1, {allele0:?}, {allele1:?}");
         }
-        Variant {
+        Ok(Variant {
             vcf_index,
             variant_type: VariantType::Insertion,
             position,
@@ -207,7 +252,7 @@ impl Variant {
             index_allele0,
             index_allele1,
             is_ignored: false
-        }
+        })
     }
 
     /// Creates a new indel variant.
@@ -224,28 +269,39 @@ impl Variant {
     /// * if `index_allele0 > index_allele1`
     /// * if the provided sequences do not match an indel variant
     /// * if the reference allele is passed in and it does not have the same length as `ref_len`
-    pub fn new_indel(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Variant {
+    pub fn new_indel(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Result<Variant, VariantError> {
         // we always assume alleles come "sorted" and they are heterozygous
-        assert!(index_allele0 < index_allele1);
+        if index_allele0 >= index_allele1 {
+            return Err(VariantError::IndexAlleleOrder);
+        }
 
         // reference length must be greater than 1 to be an indel, but ALTs can really be any length after that (>=1 anyways)
-        assert!(ref_len > 1);
+        if ref_len <= 1 {
+            return Err(VariantError::RefLenGT1);
+        }
         
         if index_allele0 == 0 {
             // this allele is also the reference allele
-            assert_eq!(allele0.len(), ref_len);
+            if allele0.len() != ref_len {
+                return Err(VariantError::Allele0RefLen);
+            }
         } else {
             // it's not a reference allele, since this is an indel, length can be anything >= 1
-            assert!(!allele0.is_empty());
+            if allele0.is_empty() {
+                return Err(VariantError::EmptyAllele { index: 0 });
+            }
         }
+
         // this one just has to be >= 1
-        assert!(!allele1.is_empty());
+        if allele1.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 1 });
+        }
         
         // there's no real reason to believe in any shared sequence between alleles
         // we've seen it not work above, not worth even trying to codify warning here IMO
         // assert!(???)
         
-        Variant {
+        Ok(Variant {
             vcf_index,
             variant_type: VariantType::Indel,
             position,
@@ -257,7 +313,7 @@ impl Variant {
             index_allele0,
             index_allele1,
             is_ignored: false
-        }
+        })
     }
 
     /// Creates a new SV deletion variant.
@@ -274,19 +330,31 @@ impl Variant {
     /// * if `index_allele0 > index_allele1`
     /// * if the provided sequences do not match a deletion variant
     /// * if the reference allele is passed in and it does not have the same length as `ref_len`
-    pub fn new_sv_deletion(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Variant {
+    pub fn new_sv_deletion(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Result<Variant, VariantError> {
         // we always assume alleles come "sorted" and they are heterozygous
-        assert!(index_allele0 < index_allele1);
+        if index_allele0 >= index_allele1 {
+            return Err(VariantError::IndexAlleleOrder);
+        }
 
-        // this is one difference from plain Deletion
-        assert_eq!(index_allele0, 0);
-        assert_eq!(index_allele1, 1);
+        // this is one difference from plain Deletion, must be 0 and 1 in VCF
+        if index_allele0 != 0 || index_allele1 != 1 {
+            return Err(VariantError::MultiAllelicNotAllowed { variant_type: VariantType::SvDeletion })
+        }
         
         // this allele is also the reference allele
-        assert_eq!(allele0.len(), ref_len);
+        if allele0.len() != ref_len {
+            return Err(VariantError::Allele0RefLen);
+        }
+
+        // restriction lifted such that now allele0 must be >= allele1
+        if allele1.len() > allele0.len() {
+            return Err(VariantError::SvDeletionLen);
+        }
         
-        // this one must always be length 1
-        assert!(allele1.len() == 1);
+        // allele1 is always <= allele0, so just make sure it's not empty
+        if allele1.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 1 });
+        }
         
         // make sure the alleles start with the same thing
         if allele0[0] != allele1[0] {
@@ -296,7 +364,7 @@ impl Variant {
             */
             trace!("Deletion alleles are unexpected: {}, {}, {:?}, {:?}", position, ref_len, allele0, allele1);
         }
-        Variant {
+        Ok(Variant {
             vcf_index,
             variant_type: VariantType::SvDeletion,
             position,
@@ -308,7 +376,7 @@ impl Variant {
             index_allele0,
             index_allele1,
             is_ignored: false
-        }
+        })
     }
 
     /// Creates a new SV insertion variant.
@@ -316,6 +384,7 @@ impl Variant {
     /// # Arguments
     /// * `vcf_index` - the index of the source VCF file
     /// * `position` - the coordinate of the variant in a contig
+    /// * `ref_len` - the length of the reference allele
     /// * `allele0` - the first allele (usually REF)
     /// * `allele1` - the second allele (usually ALT[0])
     /// * `index_allele0` - the index for allele0, typically 0 for REF
@@ -323,31 +392,42 @@ impl Variant {
     /// # Panics
     /// * if `index_allele0 > index_allele1`
     /// * if the provided sequences do not match an insertion variant
-    pub fn new_sv_insertion(vcf_index: usize, position: i64, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Variant {
+    pub fn new_sv_insertion(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Result<Variant, VariantError> {
         // we always assume alleles come "sorted" and they are heterozygous
-        assert!(index_allele0 < index_allele1);
+        if index_allele0 >= index_allele1 {
+            return Err(VariantError::IndexAlleleOrder);
+        }
         
-        // this is one difference from plain Insertion
-        assert_eq!(index_allele0, 0);
-        assert_eq!(index_allele1, 1);
+        // this is one difference from plain Insertion, must be 0 and 1 in VCF
+        if index_allele0 != 0 || index_allele1 != 1 {
+            return Err(VariantError::MultiAllelicNotAllowed { variant_type: VariantType::SvInsertion })
+        }
         
-        // if reference allele is present, it must be length 1 for this type
-        assert_eq!(allele0.len(), 1);
+        // this allele is also the reference allele
+        if allele0.len() != ref_len {
+            return Err(VariantError::Allele0RefLen);
+        }
+
+        // restriction lifted such that now allele1 must be >= allele0
+        if allele1.len() < allele0.len() {
+            return Err(VariantError::SvInsertionLen);
+        }
         
-        // we have to do >= because of some multi-allelics:
-        //     chr1	286158	.	A	ATG,G	34.4
-        assert!(!allele1.is_empty(), "{position} {allele1:?}");
+        // allele0 is always <= allele1, so just make sure it's not empty
+        if allele0.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 0 });
+        }
 
         // make sure the alleles start with the same thing
         if allele0[0] != allele1[0] {
             // no counter example searched for yet, but probably exists, we'll leave this trace for now
             trace!("Insertion alleles are unexpected: {}, {}, {:?}, {:?}", position, 1, allele0, allele1);
         }
-        Variant {
+        Ok(Variant {
             vcf_index,
             variant_type: VariantType::SvInsertion,
             position,
-            ref_len: 1,
+            ref_len,
             prefix_len: 0,
             postfix_len: 0,
             allele0,
@@ -355,7 +435,7 @@ impl Variant {
             index_allele0,
             index_allele1,
             is_ignored: false
-        }
+        })
     }
 
     /// Creates a new tandem repeat variant, functionally these act very similar to indel types.
@@ -372,24 +452,30 @@ impl Variant {
     /// * if `index_allele0 > index_allele1`
     /// * if the provided sequences do not match a tandem repeat variant
     /// * if the reference allele is passed in and it does not have the same length as `ref_len`
-    pub fn new_tandem_repeat(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Variant {
+    pub fn new_tandem_repeat(vcf_index: usize, position: i64, ref_len: usize, allele0: Vec<u8>, allele1: Vec<u8>, index_allele0: u8, index_allele1: u8) -> Result<Variant, VariantError> {
         // we always assume alleles come "sorted" and they are heterozygous
-        assert!(index_allele0 < index_allele1);
+        if index_allele0 >= index_allele1 {
+            return Err(VariantError::IndexAlleleOrder);
+        }
 
         // all alleles must be >= 1 for tandem repeats, most are longer though
-        assert!(ref_len >= 1);
+        if allele0.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 0 });
+        }
+        if allele1.is_empty() {
+            return Err(VariantError::EmptyAllele { index: 1 });
+        }
         
         if index_allele0 == 0 {
-            // this allele is also the reference allele
-            assert_eq!(allele0.len(), ref_len);
+            // this allele is also the reference allele, make sure the lengths match
+            if allele0.len() != ref_len {
+                return Err(VariantError::Allele0RefLen);
+            }
         } else {
-            // it's not a reference allele, since this is an indel, length can be anything >= 1
-            assert!(!allele0.is_empty());
+            // it's not a reference allele, so nothing to check here
         }
-        // this one just has to be >= 1
-        assert!(!allele1.is_empty());
         
-        Variant {
+        Ok(Variant {
             vcf_index,
             variant_type: VariantType::TandemRepeat,
             position,
@@ -401,7 +487,7 @@ impl Variant {
             index_allele0,
             index_allele1,
             is_ignored: false
-        }
+        })
     }
 
     /// This will add a prefix to each allele, generally reference genome sequence that will allow for better matching.
@@ -556,7 +642,9 @@ impl Variant {
     /// This will return the index allele for a given haplotype index.
     /// Input must always be 0 or 1, but it might get converted to something else at multi-allelic sites.
     /// # Arguments
-    /// * `index` - must be 0 or 1
+    /// * `index` - must be 0, 1, or 2 (unknown)
+    /// # Panics
+    /// * if anything other than 0, 1, or 2 is provided
     pub fn convert_index(&self, index: u8) -> u8 {
         if index == 0 {
             self.index_allele0
@@ -581,7 +669,7 @@ mod tests {
             0, 1,
             b"A".to_vec(), b"C".to_vec(),
             0, 1
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::Snv);
         assert_eq!(variant.position(), 1);
         assert_eq!(variant.get_ref_len(), 1);
@@ -601,7 +689,7 @@ mod tests {
             0, 10, 3,
             b"AGT".to_vec(), b"A".to_vec(),
             0, 1
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::Deletion);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.get_ref_len(), 3);
@@ -614,7 +702,7 @@ mod tests {
             0, 10, 4,
             b"C".to_vec(), b"A".to_vec(),
             1, 2
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::Deletion);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.get_ref_len(), 4);
@@ -631,7 +719,7 @@ mod tests {
             0, 20,
             b"A".to_vec(), b"AGT".to_vec(),
             0, 1
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::Insertion);
         assert_eq!(variant.position(), 20);
         assert_eq!(variant.get_ref_len(), 1);
@@ -647,7 +735,7 @@ mod tests {
             0, 20, 2,
             b"A".to_vec(), b"AGT".to_vec(),
             1, 2
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::Indel);
         assert_eq!(variant.position(), 20);
         assert_eq!(variant.get_ref_len(), 2);
@@ -659,10 +747,10 @@ mod tests {
     #[test]
     fn test_sv_insertion() {
         let variant = Variant::new_sv_insertion(
-            0, 20,
+            0, 20, 1,
             b"A".to_vec(), b"AGT".to_vec(),
             0, 1
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::SvInsertion);
         assert_eq!(variant.position(), 20);
         assert_eq!(variant.get_ref_len(), 1);
@@ -679,7 +767,7 @@ mod tests {
             0, 10, 3,
             b"AGT".to_vec(), b"A".to_vec(),
             0, 1
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::SvDeletion);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.get_ref_len(), 3);
@@ -697,7 +785,7 @@ mod tests {
             b"AAAC".to_vec(),
             b"AAACAAAC".to_vec(),
             0, 1
-        );
+        ).unwrap();
         assert_eq!(variant.get_type(), VariantType::TandemRepeat);
         assert_eq!(variant.position(), 10);
         assert_eq!(variant.get_ref_len(), 4);
@@ -714,7 +802,7 @@ mod tests {
             0, 20, 2,
             b"A".to_vec(), b"AGT".to_vec(),
             1, 2
-        );
+        ).unwrap();
 
         // make sure no fixins yet
         assert_eq!(variant.get_prefix_len(), 0);

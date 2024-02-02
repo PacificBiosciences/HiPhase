@@ -152,7 +152,7 @@ pub fn is_phasable_variant(record: &bcf::Record, sample_index: usize, min_qualit
             VariantType::SvDuplication |
             VariantType::SvInversion |
             VariantType::SvBreakend |
-            VariantType::Unknown=> { Ok(false) }
+            VariantType::Unknown => { Ok(false) }
         }
     }
 }
@@ -231,6 +231,12 @@ pub fn get_variant_type(record: &bcf::Record) -> Result<VariantType, Box<dyn std
                 // make sure these only have one ALT allele
                 let num_alleles = record.alleles().len();
                 assert_eq!(num_alleles, 2);
+
+                // make sure the alternate allele is not a placeholder like <DEL>; if so, return Unknown because we do not want to phase it
+                let alt_allele = std::str::from_utf8(record.alleles()[1]).unwrap_or("<unknown>");
+                if alt_allele.starts_with('<') && alt_allele.ends_with('>') {
+                    return Ok(VariantType::Unknown);
+                }
                 
                 let svtype_str = std::str::from_utf8(svtype[0]).unwrap();
                 let sv_tag = match svtype_str {
