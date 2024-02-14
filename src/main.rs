@@ -290,10 +290,9 @@ fn main() {
                     cli_settings.reference_buffer,
                     cli_settings.min_matched_alleles,
                     cli_settings.min_mapping_quality,
-                    cli_settings.global_realign_cputime,
                     cli_settings.phase_min_queue_size,
                     cli_settings.phase_queue_increment,
-                    cli_settings.wfa_prune_distance
+                    cli_settings.global_realignment_config()
                 ) {
                     Ok(r) => r,
                     Err(e) => {
@@ -394,10 +393,9 @@ fn main() {
                         arc_cli_settings.reference_buffer,
                         arc_cli_settings.min_matched_alleles,
                         arc_cli_settings.min_mapping_quality,
-                        arc_cli_settings.global_realign_cputime,
                         arc_cli_settings.phase_min_queue_size,
                         arc_cli_settings.phase_queue_increment,
-                        arc_cli_settings.wfa_prune_distance
+                        arc_cli_settings.global_realignment_config()
                     ) {
                         Ok(r) => r,
                         Err(e) => {

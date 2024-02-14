@@ -8,6 +8,8 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use crate::read_parsing::GlobalRealignmentConfig;
+
 lazy_static! {
     /// Stores the full version string we plan to use.
     /// # Examples
@@ -173,7 +175,20 @@ pub struct Settings {
     #[clap(value_name = "SECONDS")]
     #[clap(default_value = "0.0")]
     #[clap(help_heading = Some("Allele Assignment"))]
+    #[clap(hide = true)]
     pub global_realign_cputime: f32,
+
+    /// Disables global realignment
+    #[clap(long = "disable-global-realignment")]
+    #[clap(help_heading = Some("Allele Assignment"))]
+    pub disable_global_realignment: bool,
+
+    /// The maximum allowed edit distance for global realignment before fallback to local realignment
+    #[clap(long = "global-realignment-max-ed")]
+    #[clap(value_name = "DISTANCE")]
+    #[clap(default_value = "500")]
+    #[clap(help_heading = Some("Allele Assignment"))]
+    pub global_max_edit_distance: usize,
 
     /// Sets a pruning threshold on global realignment, set to 0 to disable pruning
     #[clap(long = "global-pruning-distance")]
@@ -181,6 +196,20 @@ pub struct Settings {
     #[clap(default_value = "500")]
     #[clap(help_heading = Some("Allele Assignment"))]
     pub wfa_prune_distance: usize,
+
+    /// Sets a maximum global realignment failure ratio before disabling global realignment for entire block
+    #[clap(long = "max-global-failure-ratio")]
+    #[clap(value_name = "FRAC")]
+    #[clap(default_value = "0.5")]
+    #[clap(help_heading = Some("Allele Assignment"))]
+    pub global_failure_ratio: f64,
+
+    /// Sets a minimum number of global realignment failures before --max-global-failure-ratio is active
+    #[clap(long = "global-failure-count")]
+    #[clap(value_name = "COUNT")]
+    #[clap(default_value = "50")]
+    #[clap(help_heading = Some("Allele Assignment"))]
+    pub global_failure_minimum: usize,
 
     /// Sets the minimum queue size for the phasing algorithm
     #[clap(long = "phase-min-queue-size")]
@@ -266,6 +295,22 @@ fn check_required_vcf(filename: &Path, label: &str) {
 
 }
 
+impl Settings {
+    /// Wrapper function to build a global realignment configuration from our CLI settings
+    pub fn global_realignment_config(&self) -> Option<GlobalRealignmentConfig> {
+        if self.disable_global_realignment {
+            None
+        } else {
+            Some(GlobalRealignmentConfig {
+                max_edit_distance: self.global_max_edit_distance,
+                wfa_prune_distance: self.wfa_prune_distance,
+                global_failure_ratio: self.global_failure_ratio,
+                global_failure_minimum: self.global_failure_minimum
+            })
+        }
+    }
+}
+
 pub fn get_raw_settings() -> Settings {
     Settings::parse()
 }
@@ -322,26 +367,46 @@ pub fn check_settings(mut settings: Settings) -> Settings {
     }
 
     // dump stuff to the logger
-    info!("Minimum call quality: {}", settings.min_variant_quality);
-    info!("Minimum mapping quality: {}", settings.min_mapping_quality);
-    info!("Minimum matched alleles: {}", settings.min_matched_alleles);
+    info!("Variant filtering:");
+    info!("\tMinimum call quality: {}", settings.min_variant_quality);
+    info!("\tMinimum mapping quality: {}", settings.min_mapping_quality);
+    info!("\tMinimum matched alleles: {}", settings.min_matched_alleles);
     if settings.min_matched_alleles > 2 {
-        warn!("Setting the minimum matched alleles > 2 has not been tested.")
+        warn!("\tSetting the minimum matched alleles > 2 has not been tested.")
     }
-    info!("Minimum spanning reads: {}", settings.min_spanning_reads);
-    info!("Supplemental mapping block joins: {}", if settings.disable_supplemental_joins { "DISABLED" } else { "ENABLED" });
-    info!("Phase singleton blocks: {}", if settings.phase_singletons { "ENABLED" } else { "DISABLED" });
-    info!("Local re-alignment maximum reference buffer: +-{} bp", settings.reference_buffer);
-    if settings.global_realign_cputime == 0.0 {
-        info!("Global re-alignment: DISABLED");
+
+    info!("Phase block generation:");
+    info!("\tMinimum spanning reads: {}", settings.min_spanning_reads);
+    info!("\tSupplemental mapping block joins: {}", if settings.disable_supplemental_joins { "DISABLED" } else { "ENABLED" });
+    info!("\tPhase singleton blocks: {}", if settings.phase_singletons { "ENABLED" } else { "DISABLED" });
+
+    info!("Allele assignment:");
+    info!("\tLocal re-alignment maximum reference buffer: +-{} bp", settings.reference_buffer);
+    // global realignment is enabled with edit distance, so clear it out here
+    if settings.disable_global_realignment {
+        info!("\tGlobal re-alignment: DISABLED");
     } else {
-        info!("Global re-alignment CPU time: {} seconds", settings.global_realign_cputime);
+        if settings.global_max_edit_distance > 10000 {
+            warn!("\tGlobal max edit distance is set very high, this may lead to significant computational costs");
+        }
+        info!("\tGlobal re-alignment max edit distance: {}", settings.global_max_edit_distance);
         if settings.wfa_prune_distance == usize::MAX {
-            info!("Global prune distance: DISABLED");
+            info!("\tGlobal prune distance: DISABLED");
         } else {
-            info!("Global prune distance: {}", settings.wfa_prune_distance);
+            info!("\tGlobal prune distance: {}", settings.wfa_prune_distance);
+        }
+
+        if !(0.0..=1.0).contains(&settings.global_failure_ratio) {
+            error!("--global-failure-ratio must be in the range [0.0, 1.0]");
+            std::process::exit(exitcode::USAGE);
         }
     }
+
+    // warn that this is deprecated, but otherwise ignore it
+    if settings.global_realign_cputime != 0.0 {
+        warn!("Option \"--global-realignment-cputime\" is deprecated and will be removed in a future release.");
+    }
+
     info!("Processing threads: {}", settings.threads);
     info!("I/O threads: {}", settings.io_threads.unwrap());
     if settings.csi_index {
