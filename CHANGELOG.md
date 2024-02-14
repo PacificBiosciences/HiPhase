@@ -1,3 +1,20 @@
+# v1.4.0
+## Changes
+* **Major changes to dual-mode allele assignment:** Prior to this version, global realignment would revert to local realignment if the CPU cost (in seconds) exceeded a user provided threshold. While this was useful for fast-tracking noisy phase blocks, it could lead to non-deterministic output as CPU costs can vary. The thresholding has been reworked such that global realignment will revert to local realignment *for an individual mapping* if the edit distance exceeds a user provided threshold (default: 500). Additionally, global realignment will revert to local realignment *for the remainder of a putative phase block* if too many reads have reverted to local realignment (default: 50%, minimum number of failures: 50 mappings). This has the following downstream impact on results:
+  * All results from HiPhase are **fully deterministic** from run to run.
+  * Baseline quality scores for local realignment have been adjusted to scale at the same relative ratios as those from global realignment. 
+    * When running HiPhase on _only_ small variants (e.g., local realignment mode only), this tended to slightly increase the number of switch flip errors relative to v1.3.0.
+    * When running HiPhase on small, structural, and tandem repeat variants (recommended), we observed a small decrease in switch flip errors relative to v1.3.0.
+  * Relative to v1.3.0, we observed reduced run-time costs for all tests (~25% reduction in both CPU time and wall-clock time, on average).
+  * The number of mappings processed through global/local realignment are now tracked in the `--stats-file`.
+* **Global realignment is now on by default**, reflecting our overall recommended usage of HiPhase. This can be disabled with the `--disable-global-realignment` option.
+* **CLI changes:** The CLI has been updated to reflect the above algorithmic changes. These new CLI options have been added to reflect the changes:
+  * `--disable-global-realignment` - This option will disable all global realignments; it is recommended if only small variant files are available for phasing
+  * `--global-realignment-max-ed <DISTANCE>` - Controls the maximum allowed edit distance before reverting an individual mapping to local realignment (default: 500)
+  * `--max-global-failure-ratio <FRAC>` - Controls the maximum allowed failure rates for global realignment before reverting the rest of the phase block to local realignment (default: 50%)
+  * `--global-failure-count <COUNT>` - Controls the minimum number of failures required before the failure rate check is enabled (default: 50)
+  * `--global-realignment-cputime <SECONDS>` - **Deprecated**, this option is now hidden on the CLI. It will produce a warning if used but has no impact on the downstream results.
+
 # v1.3.0
 ## Changes
 - Relaxes the requirements for SV deletion and insertion events such that they no longer require an alternate or reference allele, respectively, to have length 1

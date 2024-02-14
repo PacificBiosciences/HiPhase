@@ -18,18 +18,20 @@ hiphase \
 ```
 
 Parameters:
-* `--bam {IN_BAM}` - path to a BAM file containing reads only from the sample that is being phased, this option can be specified multiple times; each BAM file can only contain reads from a single sample
-* `--vcf {IN_VCF}` - path to a VCF file containing the variants to phase, this option can be specified multiple times; each sample being phased must appear in each provided VCF file
+* `--bam {IN_BAM}` - path to a BAM file containing reads only from the sample that is being phased, this option can be specified multiple times; each BAM file can only contain reads from a single sample; each BAM file must be indexed prior to running HiPhase
+* `--vcf {IN_VCF}` - path to a VCF file containing the variants to phase, this option can be specified multiple times; each sample being phased must appear in each provided VCF file; we recommend providing at least a small variant VCF and structural variant VCF; each VCF file must be index prior to running HiPhase
 * `--output-vcf {OUT_VCF}` - path to the output VCF that will contain the phased variants, this option must be specified the same number of times as `--vcf` 
 * `--reference {REFERENCE}` - a FASTA file containing the reference genome, gzip allowed; as of v0.9.0, this is a required parameter
 * `--threads {THREADS}` - number of threads to use for phasing (default: 1)
 
 ## Quickstart Example
 This example also includes some auxiliary outputs that may be useful for tracking phase result statistics.
+This example also only uses a small variant VCF, so `--disable-global-realignment` is recommended.
 For details on each, refer to the [Output files](#output-files) section.
 
 ```
 hiphase \
+    --disable-global-realignment \
     --threads 16 \
     --reference human_GRCh38_no_alt_analysis_set.fasta \
     --bam m64109_200805_204709.GRCh38.bam \
@@ -84,12 +86,11 @@ hiphase \
 ## Joint phasing small variants, structural variants, and tandem repeats
 To *jointly* phase small variants, structural variants, and tandem repeats, pass all VCF files to HiPhase and specify one output VCF file for each in the same order as input.
 Currently, DeepVariant, pbsv, and TRGT are the three supported input types.
-While not required, it is *strongly recommended* that global re-alignment is enabled when structural variants and tandem repeats are provided.
+Global re-alignment is *strongly recommended* (and enabled by default) when structural variants and tandem repeats are provided.
 
 ```bash
 hiphase \
     --reference human_GRCh38_no_alt_analysis_set.fasta \
-    --global-realignment-cputime 300 \
     --vcf HG001.GRCh38.deepvariant.vcf.gz \
     --output-vcf HG001.GRCh38.deepvariant.phased.vcf.gz \
     --vcf HG001.GRCh38.pbsv.vcf.gz \
@@ -136,6 +137,20 @@ By default, HiPhase will effectively skip phase blocks that only contain a singl
 However, there may be situations where generating this information and/or haplotagging the reads is still useful.
 To enable the phasing of these blocks, pass `--phase-singletons` to the CLI.
 Note: this is likely to lead to increased compute / run time depending on the relative abundance of singletons in the dataset and the quantity of reads overlapping that data.
+
+## Controlling dual-mode allele assignment
+In HiPhase, dual-mode allele assignment is enabled by default.
+This process attempts to globally realign a mapping to assign alleles, reverting to local realignment as a backup.
+In general, global realignment is more accurate, but also more computationally costly in noisy genomic regions and/or regions with incomplete variant calls.
+To prevent excessive run-times, there are checks in place that will stop global realignment for an individual mapping and revert to local realignment if it becomes too expensive.
+Additionally, if too many mappings within a block are failing global realignment (>50% by default), then HiPhase will revert the rest of the block to using local realignment only.
+This combination of checks allows HiPhase to switch between global and local realignment in a deterministic way.
+The following options control how global realignment is used for read parsing:
+
+* `--disable-global-realignment` - this will disable global realignment for the entire process; this is recommended if _only_ a small variant VCF is available
+* `--global-realignment-max-ed <DISTANCE>` - sets a maximum on the edit distance for global realignment for a single read mapping; if this maximum is reached, HiPhase will revert to local realignment for the mapping; increasing this value may increase run-time but also generate better realignments
+* `--max-global-failure-ratio <FRAC>` - sets a maximum fraction of global realignment failures to allow before reverting the rest of the phase block to local realignment; increasing this may lead to more global realignments, but also to longer run times; decreasing this may lead to fewer global realignments, but also improved run times in noisy phase blocks
+* `--global-failure-count <COUNT>` - sets the minimum number of global realignment failures before the failure ratio check is active 
 
 # Supported upstream processes
 The following upstream processes are supported as inputs to HiPhase:
@@ -284,7 +299,8 @@ Fields:
 * `allele_failures` - the number of alleles that failed to match for a given variant type (see order above); this includes ambiguous / equal matches and deleted alleles
 * `allele0_assigned` - the number of alleles internally assigned to allele0 (typically reference) for a given variant type (see order above)
 * `allele1_assigned` - the number of alleles internally assigned to allele1 (always alternate) for a given variant type (see order above); for diploid organisms, `allele0_assigned` and `allele1_assigned` are expect to be roughly equal, and deviations may represent bias and/or lower quality variant inputs
-* `is_global_realignment` - if `true`, then global re-alignment was used to extract alleles for this block and all stats reflect that process; otherwise, if `false`, then local re-alignment was used
+* `global_aligned` - the number of mappings that were globally realigned
+* `local_aligned` - the number of mappings that were locally realigned
 * `pruned_solutions` - the number of solutions pruned during the A* traversal; if 0, then this block has a _guaranteed_ optimal solution given the problem definition
 * `estimated_cost` - the estimated, heuristic cost to solve this block
 * `actual_cost` - the actual cost of the solution from HiPhase
@@ -296,9 +312,9 @@ Fields:
 
 Example:
 ```
-block_index,sample_name,chrom,start,end,num_variants,num_reads,skipped_reads,num_alleles,allele_matches,allele_partials,allele_failures,allele0_assigned,allele1_assigned,is_global_realignment,pruned_solutions,estimated_cost,actual_cost,cost_ratio,phased_variants,homozygous_variants,skipped_variants
-0,HG001,chr1,10107,31294,63,163,96,3079,"[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[2669, 235, 24, 0, 0, 151, 0, 0, 0, 0, 0]","[15, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[1492, 74, 19, 0, 0, 145, 0, 0, 0, 0, 0]","[1177, 161, 5, 0, 0, 6, 0, 0, 0, 0, 0]",true,3061,2610,2902,0.8993797381116472,49,14,0
-1,HG001,chr1,42042,78514,8,19,17,70,"[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[22, 36, 2, 0, 0, 0, 0, 0, 0, 10, 0]","[0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[20, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0]","[2, 36, 2, 0, 0, 0, 0, 0, 0, 0, 0]",true,0,0,0,1.0,8,0,0
+block_index,sample_name,chrom,start,end,num_variants,num_reads,skipped_reads,num_alleles,allele_matches,allele_partials,allele_failures,allele0_assigned,allele1_assigned,global_aligned,local_aligned,pruned_solutions,estimated_cost,actual_cost,cost_ratio,phased_variants,homozygous_variants,skipped_variants
+0,HG001,chr1,10107,31294,63,102,69,1779,"[10, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[1500, 148, 11, 0, 0, 109, 0, 0, 0, 0, 0]","[7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[878, 38, 6, 0, 0, 103, 0, 0, 0, 0, 0]","[632, 111, 5, 0, 0, 6, 0, 0, 0, 0, 0]",149,2,0,18040,18080,0.9977876106194691,58,5,0
+1,HG001,chr1,42042,78514,8,10,9,40,"[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[14, 19, 2, 0, 0, 0, 0, 0, 0, 5, 0]","[0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]","[12, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0]","[2, 19, 2, 0, 0, 0, 0, 0, 0, 0, 0]",18,0,0,0,0,1.0,8,0,0
 ...
 ```
 
