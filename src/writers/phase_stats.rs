@@ -4,10 +4,11 @@ use crate::phaser::PhaseResult;
 
 use serde::Serialize;
 use std::fs::File;
+use std::ops::AddAssign;
 use std::path::Path;
 
 /// Contains statistics on the loading and parsing of reads into alleles.
-#[derive(Debug)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReadStats {
     /// The number of reads loaded
     num_reads: u64,
@@ -25,8 +26,10 @@ pub struct ReadStats {
     allele0_matches: [u64; VariantType::Unknown as usize + 1],
     /// Records the number of matches to allele 1
     allele1_matches: [u64; VariantType::Unknown as usize + 1],
-    /// If true, then global realignment was used to pull out reads
-    is_global_realignment: bool
+    /// The number of reads that used global re-alignment
+    global_aligned: usize,
+    /// The number of reads that used local re-alignment
+    local_aligned: usize
 }
 
 impl ReadStats {
@@ -40,7 +43,8 @@ impl ReadStats {
     /// * `failed_matches` - the number of ambiguous or no-sequence alleles
     /// * `allele0_matches` - the number of alleles assigned to allele 0
     /// * `allele1_matches` - the number of alleles assigned to allele 1
-    /// * `is_global_realignment` - if True, then global realignment was used to transform reads into alleles
+    /// * `global_aligned` - the number of reads that were globally aligned
+    /// * `local_aligned` - the number of reads that were locally aligned
     /// # Panics
     /// * if `num_reads` > `num_alleles`, because that would imply some reads have no alleles
     /// * if `num_alleles != exact_matches.sum() + inexact_matches.sum()`, because that would imply some alleles are not being counted correctly somewhere
@@ -53,7 +57,8 @@ impl ReadStats {
         failed_matches: [u64; VariantType::Unknown as usize + 1], 
         allele0_matches: [u64; VariantType::Unknown as usize + 1], 
         allele1_matches: [u64; VariantType::Unknown as usize + 1],
-        is_global_realignment: bool
+        global_aligned: usize,
+        local_aligned: usize
     ) -> ReadStats {
         assert!(num_alleles >= num_reads);
         assert_eq!(num_alleles, exact_matches.iter().sum::<u64>() + inexact_matches.iter().sum::<u64>());
@@ -67,8 +72,58 @@ impl ReadStats {
             failed_matches,
             allele0_matches,
             allele1_matches,
-            is_global_realignment
+            global_aligned,
+            local_aligned
         }
+    }
+    
+    // adders
+    pub fn increase_num_reads(&mut self, value: u64) {
+        self.num_reads += value;
+    }
+
+    pub fn increase_skipped_reads(&mut self, value: u64) {
+        self.skipped_reads += value;
+    }
+
+    // getters
+    pub fn skipped_reads(&self) -> u64 {
+        self.skipped_reads
+    }
+
+    pub fn local_aligned(&self) -> usize {
+        self.local_aligned
+    }
+
+    pub fn global_aligned(&self) -> usize {
+        self.global_aligned
+    }
+
+    pub fn total_aligned(&self) -> usize {
+        self.local_aligned + self.global_aligned
+    }
+}
+
+impl AddAssign for ReadStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.num_reads += rhs.num_reads;
+        self.skipped_reads += rhs.skipped_reads;
+        self.num_alleles += rhs.num_alleles;
+        add_assign_array(&mut self.exact_matches, &rhs.exact_matches);
+        add_assign_array(&mut self.inexact_matches, &rhs.inexact_matches);
+        add_assign_array(&mut self.failed_matches, &rhs.failed_matches);
+        add_assign_array(&mut self.allele0_matches, &rhs.allele0_matches);
+        add_assign_array(&mut self.allele1_matches, &rhs.allele1_matches);
+        self.global_aligned += rhs.global_aligned;
+        self.local_aligned += rhs.local_aligned;
+    }
+}
+
+/// Wrapper function for adding two array of equal length element wise
+fn add_assign_array(lhs: &mut [u64], rhs: &[u64]) {
+    assert_eq!(lhs.len(), rhs.len());
+    for (l, &r) in lhs.iter_mut().zip(rhs.iter()) {
+        *l += r;
     }
 }
 
@@ -180,8 +235,10 @@ struct CsvRow {
     allele0_assigned: Option<String>,
     /// Records the number of assignments to allele1 for a type
     allele1_assigned: Option<String>,
-    /// if True, then global realignment was used to transform reads to alleles for this block
-    is_global_realignment: Option<bool>,
+    /// The number of globally re-aligned reads
+    global_aligned: Option<usize>,
+    /// The number of locally re-aligned reads
+    local_aligned: Option<usize>,
     /// The number of solutions that were pruned during calculation
     pruned_solutions: Option<u64>,
     /// For heuristic solvers, the estimate cost prior to computation
@@ -226,7 +283,8 @@ impl StatsWriter {
         let allele_failures;
         let allele0_assigned;
         let allele1_assigned;
-        let is_global_realignment;
+        let global_aligned;
+        let local_aligned;
         match &phase_result.read_statistics {
             Some(rs) => {
                 num_reads = Some(rs.num_reads);
@@ -237,7 +295,8 @@ impl StatsWriter {
                 allele_failures = Some(format!("{:?}", rs.failed_matches));
                 allele0_assigned = Some(format!("{:?}", rs.allele0_matches));
                 allele1_assigned = Some(format!("{:?}", rs.allele1_matches));
-                is_global_realignment = Some(rs.is_global_realignment);
+                global_aligned = Some(rs.global_aligned);
+                local_aligned = Some(rs.local_aligned);
             },
             None => {
                 num_reads = None;
@@ -248,7 +307,8 @@ impl StatsWriter {
                 allele_failures = None;
                 allele0_assigned = None;
                 allele1_assigned = None;
-                is_global_realignment = None;
+                global_aligned = None;
+                local_aligned = None;
             }
         };
         
@@ -296,7 +356,8 @@ impl StatsWriter {
             allele_failures,
             allele0_assigned,
             allele1_assigned,
-            is_global_realignment,
+            global_aligned,
+            local_aligned,
             pruned_solutions,
             estimated_cost,
             actual_cost,
@@ -309,5 +370,30 @@ impl StatsWriter {
         self.csv_writer.serialize(&row)?;
         self.csv_writer.flush()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_assign() {
+        let mut read_stats: ReadStats = Default::default();
+        let rhs = ReadStats::new(
+            10, 12, 33, 
+            [1; VariantType::Unknown as usize + 1],
+            [2; VariantType::Unknown as usize + 1],
+            [3; VariantType::Unknown as usize + 1],
+            [2; VariantType::Unknown as usize + 1],
+            [1; VariantType::Unknown as usize + 1],
+            10, 2
+        );
+
+        println!("{read_stats:?}");
+        read_stats += rhs.clone();
+        println!("{rhs:?}");
+        println!("{read_stats:?}");
+        assert_eq!(read_stats, rhs);
     }
 }

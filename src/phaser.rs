@@ -8,7 +8,7 @@ use crate::read_parsing;
 use crate::writers::phase_stats::{PhaseStats, ReadStats};
 
 use bio::data_structures::interval_tree::IntervalTree;
-use log::{debug, trace, warn};
+use log::{debug, trace};
 use priority_queue::PriorityQueue;
 use rust_htslib::bcf;
 use rust_htslib::bcf::record::GenotypeAllele;
@@ -399,16 +399,15 @@ fn get_solution_span_counts(
 /// * `reference_buffer` - the number of nearby bases to try to use for local realignment
 /// * `min_matched_alleles` - the minimum number of matched alleles required to include a read
 /// * `min_mapq` - the minimum MAPQ to include a read
-/// * `global_realign_cputime` - the maximum allowed global realignment CPU time; if 0, then only local realignment is used
 /// * `min_queue_size` - the minimum length of the queue
 /// * `queue_increment` - the length that the queue grows as more variants are added to the solution
-/// * `wfa_prune_distance` - maximum allowed distance a wavefront can lag; make smaller to reduce run-time at the cost of accuracy
+/// * `global_config` - the global realignment configuration; if None, then only local realignment is used
 #[allow(clippy::too_many_arguments)]
 pub fn solve_block(
     phase_problem: &PhaseBlock, vcf_paths: &[PathBuf], bam_paths: &[PathBuf], 
     reference_genome: &ReferenceGenome, reference_buffer: usize,
-    min_matched_alleles: usize, min_mapq: u8, global_realign_cputime: f32,
-    min_queue_size: usize, queue_increment: usize, wfa_prune_distance: usize
+    min_matched_alleles: usize, min_mapq: u8,
+    min_queue_size: usize, queue_increment: usize, global_config: Option<read_parsing::GlobalRealignmentConfig>
 ) -> Result<(PhaseResult, HaplotagResult), Box<dyn std::error::Error>> {
     debug!("Solving problem: {:?}", phase_problem);
     
@@ -435,7 +434,7 @@ pub fn solve_block(
     }
 
     // homs are only used if global realignment is being attempted
-    let load_homs: bool = global_realign_cputime > 0.0;
+    let load_homs: bool = global_config.is_some();
 
     // lets extract the variants we care about from the vcf
     let (mut variant_calls, mut hom_calls): (Vec<Variant>, Vec<Variant>) = load_variant_calls(
@@ -518,36 +517,20 @@ pub fn solve_block(
     let phasable_segments: IntervalTree<usize, ReadSegment>;
     let read_stats: ReadStats;
 
-    if global_realign_cputime == 0.0 {
+    if let Some(grc) = global_config.as_ref() {
+        
+        // we are attempting global re-alignments
+        (read_segments, phasable_segments, read_stats) = read_parsing::load_full_read_segments(
+            phase_problem, bam_paths, &variant_calls, &hom_calls,
+            reference_genome, min_matched_alleles, min_mapq,
+            grc
+        )?;
+    } else {
         // we are doing local re-alignments only
         (read_segments, phasable_segments, read_stats) = read_parsing::load_read_segments(
             phase_problem, bam_paths, reference_genome.filename(),
             &variant_calls, min_matched_alleles, min_mapq
         )?;
-    } else {
-        // we are attempting global re-alignments
-        (read_segments, phasable_segments, read_stats) = match read_parsing::load_full_read_segments(
-            phase_problem, bam_paths, &variant_calls, &hom_calls,
-            reference_genome, min_matched_alleles, min_mapq,
-            global_realign_cputime, wfa_prune_distance
-        ) {
-            Ok(rs) => rs,
-            Err(e) => {
-                if e.to_string() == "max_runtime reached" {
-                    // fall back to the local realignment approach if we run too long
-                    warn!(
-                        "B#{} ({}:{}-{}) detected excessive runtime in read parsing, reverting to local re-alignment.", 
-                        phase_problem.get_block_index(), phase_problem.get_chrom(), phase_problem.get_start(), phase_problem.get_end()
-                    );
-                    read_parsing::load_read_segments(
-                        phase_problem, bam_paths, reference_genome.filename(),
-                        &variant_calls, min_matched_alleles, min_mapq
-                    )?
-                } else {
-                    return Err(e);
-                }
-            }
-        };
     }
 
     // read segment debugging

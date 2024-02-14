@@ -9,6 +9,12 @@ use simple_error::bail;
 use std::cmp::Reverse;
 use rustc_hash::FxHashMap as HashMap;
 
+#[derive(thiserror::Error, Debug)]
+pub enum WFAGraphError {
+    #[error("Max_edit_distance ({distance}) reached during WFA solving")]
+    MaxEditDistance { distance: usize }
+}
+
 pub type NodeAlleleMap = HashMap<usize, Vec<(usize, u8)>>;
 
 /// Contains the core data that represents a "node".
@@ -51,20 +57,30 @@ impl WFANode {
 
 /// Contains functionality for building a Partial-Order Alignment (POA) graph and then aligning a sequence to it.
 /// Assumes that the last node added to the graph is the "target" or "destination" for mapping.
-#[derive(Default)]
 pub struct WFAGraph {
     /// all the nodes in the graph so far
     nodes: Vec<WFANode>,
     /// all the edges from one node to the next
-    edges: Vec<Vec<usize>>
+    edges: Vec<Vec<usize>>,
+    /// if the edit distance ever goes beyond this, it will return an Err
+    max_edit_distance: usize
+}
+
+impl Default for WFAGraph {
+    fn default() -> Self {
+        Self::new(1000)
+    }
 }
 
 impl WFAGraph {
     /// Creates a new empty graph
-    pub fn new() -> WFAGraph {
+    /// # Arguments
+    /// * `max_edit_distance` - the maximum edit distance before erroring
+    pub fn new(max_edit_distance: usize) -> WFAGraph {
         WFAGraph {
             nodes: Default::default(),
-            edges: Default::default()
+            edges: Default::default(),
+            max_edit_distance
         }
     }
 
@@ -74,16 +90,18 @@ impl WFAGraph {
     /// * `variants` - a set of heterozygous variants that we are trying to assign to a read
     /// * `ref_start` - the reference start coordinate, used for offsetting variant positions; 0-based inclusive
     /// * `ref_end` - the reference end coordinate, used for offsetting variant positions; 0-based exclusive
+    /// * `max_edit_distance` - the maximum edit distance before erroring
     /// # Errors
     /// * if there are any errors from adding a node to the graph
-    pub fn from_reference_variants(reference: &[u8], variants: &[Variant], ref_start: usize, ref_end: usize) -> 
+    pub fn from_reference_variants(reference: &[u8], variants: &[Variant], ref_start: usize, ref_end: usize, max_edit_distance: usize) -> 
         Result<(WFAGraph, NodeAlleleMap), Box<dyn std::error::Error>> {
         Self::from_reference_variants_with_hom(
             reference,
             variants,
             &[],
             ref_start,
-            ref_end
+            ref_end,
+            max_edit_distance
         )
     }
 
@@ -94,12 +112,13 @@ impl WFAGraph {
     /// * `hom_variants` - a set of homozygous variants that we are not trying to assign to a read, but they make alignment better
     /// * `ref_start` - the reference start coordinate, used for offsetting variant positions; 0-based inclusive
     /// * `ref_end` - the reference end coordinate, used for offsetting variant positions; 0-based exclusive
+    /// * `max_edit_distance` - the maximum edit distance before erroring
     /// # Errors
     /// * if there are any errors from adding a node to the graph
-    pub fn from_reference_variants_with_hom(reference: &[u8], variants: &[Variant], hom_variants: &[Variant], ref_start: usize, ref_end: usize) -> 
+    pub fn from_reference_variants_with_hom(reference: &[u8], variants: &[Variant], hom_variants: &[Variant], ref_start: usize, ref_end: usize, max_edit_distance: usize) -> 
         Result<(WFAGraph, NodeAlleleMap), Box<dyn std::error::Error>> {
         
-        let mut graph: WFAGraph = Default::default();
+        let mut graph: WFAGraph = WFAGraph::new(max_edit_distance);
         let mut node_to_alleles: NodeAlleleMap = Default::default();
 
         let mut previous_end: usize = ref_start;
@@ -315,7 +334,7 @@ impl WFAGraph {
     /// * `other_sequence` - the sequence being aligned to this graph
     /// # Errors
     /// * if the maximum edit distance is reached; this is a safeguard from run-away loops
-    pub fn edit_distance(&self, other_sequence: &[u8]) -> Result<WFAResult, Box<dyn std::error::Error>> {
+    pub fn edit_distance(&self, other_sequence: &[u8]) -> Result<WFAResult, WFAGraphError> {
         self.edit_distance_with_pruning(other_sequence, usize::MAX)
     }
 
@@ -327,7 +346,7 @@ impl WFAGraph {
     /// * `prune_distance` - if a wavefront is behind the farthest wavefront by this distance, it will be pruned; set to usize::MAX to disable pruning
     /// # Errors
     /// * if the maximum edit distance is reached; this is a safeguard from run-away loops
-    pub fn edit_distance_with_pruning(&self, other_sequence: &[u8], prune_distance: usize) -> Result<WFAResult, Box<dyn std::error::Error>> {
+    pub fn edit_distance_with_pruning(&self, other_sequence: &[u8], prune_distance: usize) -> Result<WFAResult, WFAGraphError> {
         // We will structure the algorithm mentally such that X-axis is the graph and Y-axis is `other_sequence`.
         // This means we are iterating on columns representing characters in the graph.
         // Each column will be other_len long.
@@ -363,7 +382,6 @@ impl WFAGraph {
 
         // each loop of WFA will increase our edit distance by 1
         let mut edit_distance: usize = 0;
-        let max_edit_distance: usize = 100000;
         let mut farthest_progression: usize = 0;
         let mut min_progression: usize = 0;
         
@@ -415,7 +433,7 @@ impl WFAGraph {
                 
                 // pull out the active wavefront for this node
                 let mut wavefront: HashMap<isize, Vec<(usize, usize)>> = active_wavefronts.remove(&node_index).unwrap();
-                let maxfront: &mut HashMap<isize, usize> = max_wavefronts.entry(node_index).or_insert_with(Default::default);
+                let maxfront: &mut HashMap<isize, usize> = max_wavefronts.entry(node_index).or_default();
 
                 // `other_start` represent the first position in `other_sequence` for this WF diagonal, 
                 //      and it *can* be negative when we "delete" more node sequence than other sequence
@@ -497,9 +515,9 @@ impl WFAGraph {
                             if ((other_start + max_offset as isize) as usize) < other_sequence.len() {
                                 // we are *not* at the end of other sequence, but we *are* at the end of the graph
                                 // now we would normally split this into three waves on this node, but only the +1 is valid in this situation
-                                let node_wf: &mut HashMap<isize, Vec<(usize, usize)>> = next_wavefronts.entry(node_index).or_insert_with(Default::default);
+                                let node_wf: &mut HashMap<isize, Vec<(usize, usize)>> = next_wavefronts.entry(node_index).or_default();
                                 // +1 on diagonal - graph does not advance, other does (other has relative insertion); other_start is one more, but offset does not increase
-                                let plus_diagonal : &mut Vec<(usize, usize)> = node_wf.entry(*other_start+1).or_insert(vec![]);
+                                let plus_diagonal : &mut Vec<(usize, usize)> = node_wf.entry(*other_start+1).or_default();
                                 plus_diagonal.push((max_offset, best_set));
                             } else {
                                 // we are at the end of both final node and the other sequence
@@ -512,9 +530,9 @@ impl WFAGraph {
                             // the `new_offset` tells our algorithm which base we're comparing and orients us to a diagonal
                             let new_offset: isize = other_start + max_offset as isize;
                             for &successor_index in self.edges[node_index].iter() {
-                                let node_wf: &mut HashMap<isize, Vec<(usize, usize)>> = active_wavefronts.entry(successor_index).or_insert_with(Default::default);
-                                let copy_diagonal: &mut Vec<(usize, usize)> = node_wf.entry(new_offset).or_insert(vec![]);
-                                
+                                let node_wf: &mut HashMap<isize, Vec<(usize, usize)>> = active_wavefronts.entry(successor_index).or_default();
+                                let copy_diagonal: &mut Vec<(usize, usize)> = node_wf.entry(new_offset).or_default();
+
                                 // the successor set should include the best + the successors node index
                                 let current_set: &BitVec = &index_to_treeset[best_set];
                                 let mut new_set: BitVec = BitVec::from_elem(self.nodes.len(), false);
@@ -535,20 +553,20 @@ impl WFAGraph {
                         }
                     } else {
                          // now we split this into three waves on this node
-                         let node_wf: &mut HashMap<isize, Vec<(usize, usize)>> = next_wavefronts.entry(node_index).or_insert_with(Default::default);
+                         let node_wf: &mut HashMap<isize, Vec<(usize, usize)>> = next_wavefronts.entry(node_index).or_default();
                          // -1 on diagonal - graph advances, other does not (other has relative deletion); other_start is one less, but the offset increases still
-                         let minus_diagonal: &mut Vec<(usize, usize)> = node_wf.entry(*other_start-1).or_insert(vec![]);
+                         let minus_diagonal: &mut Vec<(usize, usize)> = node_wf.entry(*other_start-1).or_default();
                          minus_diagonal.push((max_offset+1, best_set));
                          
                          // these two can only happen if sequence remains in other
                          assert!(*other_start + max_offset as isize >= 0);
                          if ((*other_start + max_offset as isize) as usize) < other_sequence.len() {
                              // +0 on diagonal - both node and other advance with mismatch; other_start does not change, but offset increases +1
-                             let zero_diagonal: &mut Vec<(usize, usize)> = node_wf.entry(*other_start).or_insert(vec![]);
+                             let zero_diagonal: &mut Vec<(usize, usize)> = node_wf.entry(*other_start).or_default();
                              zero_diagonal.push((max_offset+1, best_set));
                              
                              // +1 on diagonal - graph does not advance, other does (other has relative insertion); other_start is one more, but offset does not increase
-                             let plus_diagonal : &mut Vec<(usize, usize)> = node_wf.entry(*other_start+1).or_insert(vec![]);
+                             let plus_diagonal : &mut Vec<(usize, usize)> = node_wf.entry(*other_start+1).or_default();
                              plus_diagonal.push((max_offset, best_set));
                          }
                     }
@@ -623,8 +641,9 @@ impl WFAGraph {
             trace!("edit_distance => {}, wave_fronts scanned => {}, active_indices={}..{}", edit_distance, wavefronts_scanned, min_active_wavefront, max_active_wavefront);
 
             // safety while debugging
-            if edit_distance > max_edit_distance {
-                bail!("Max_edit_distance ({}) reached during WFA solving", max_edit_distance);
+            if edit_distance > self.max_edit_distance {
+                // bail!("Max_edit_distance ({}) reached during WFA solving", max_edit_distance);
+                return Err(WFAGraphError::MaxEditDistance { distance: self.max_edit_distance });
             }
         }
     }
@@ -656,7 +675,7 @@ mod tests {
     #[test]
     fn test_single_node() {
         // create a new graph and add a single node to it
-        let mut graph: WFAGraph = WFAGraph::new();
+        let mut graph: WFAGraph = Default::default();
         let v1: Vec<u8> = vec![0, 1, 2, 4, 5];
         graph.add_node(v1.clone(), vec![]).unwrap();
 
@@ -678,7 +697,7 @@ mod tests {
         let v1: Vec<u8> = vec![0, 1, 2, 4, 5];
         for split_point in 0..v1.len() {
             // split the sequence at various points and verify everything is still correct
-            let mut graph: WFAGraph = WFAGraph::new();
+            let mut graph: WFAGraph = Default::default();
             graph.add_node(v1[0..split_point].to_vec(), vec![]).unwrap();
             graph.add_node(v1[split_point..].to_vec(), vec![0]).unwrap();
 
@@ -698,7 +717,7 @@ mod tests {
     #[test]
     fn test_basic_variant() {
         // create a graph where index 2 is an SNV change to either 2 or 3
-        let mut graph: WFAGraph = WFAGraph::new();
+        let mut graph: WFAGraph = Default::default();
         let v1: Vec<u8> = vec![0, 1, 2, 4, 5];
         graph.add_node(v1[0..2].to_vec(), vec![]).unwrap();
         graph.add_node(vec![2], vec![0]).unwrap();
@@ -730,7 +749,7 @@ mod tests {
         let v3 = vec![0, 1,    4, 4, 5];
 
         // this construct splits the middle into 3 separate alleles (2, 3), (2, 4), and (-, 4)
-        let mut graph: WFAGraph = WFAGraph::new();
+        let mut graph: WFAGraph = Default::default();
         let root = graph.add_node(v1[0..2].to_vec(), vec![]).unwrap();
         let s1 = graph.add_node(v1[2..4].to_vec(), vec![root]).unwrap();
         let s2 = graph.add_node(v2[2..4].to_vec(), vec![root]).unwrap();
@@ -749,7 +768,7 @@ mod tests {
         let v3 = vec![0, 1,    4, 4, 5];
 
         // this construct pairs2 (2, 4) with (-, 4)
-        let mut graph: WFAGraph = WFAGraph::new();
+        let mut graph: WFAGraph = Default::default();
         let root = graph.add_node(v1[0..2].to_vec(), vec![]).unwrap();
         // (2, 3) still alone
         let s1 = graph.add_node(v1[2..4].to_vec(), vec![root]).unwrap();
@@ -772,7 +791,7 @@ mod tests {
         let v3 = vec![0, 1,    4, 4, 5];
 
         // this construct separate the deletion event from the SNV event with a "gap" in the middle
-        let mut graph: WFAGraph = WFAGraph::new();
+        let mut graph: WFAGraph = Default::default();
         let root = graph.add_node(v1[0..2].to_vec(), vec![]).unwrap();
         // s1 just contains (2, ) 
         let s1 = graph.add_node(v1[2..3].to_vec(), vec![root]).unwrap();
@@ -802,7 +821,7 @@ mod tests {
         0 -> 1 -> 2 -> 3 -> 4,5
           ->   ->   -^
         */
-        let mut graph: WFAGraph = WFAGraph::new();
+        let mut graph: WFAGraph = Default::default();
         let root = graph.add_node(v1[0..1].to_vec(), vec![]).unwrap();
         // represents the (1, )
         let s1 = graph.add_node(v1[1..2].to_vec(), vec![root]).unwrap();
@@ -824,7 +843,7 @@ mod tests {
         let variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
@@ -851,7 +870,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 7);
@@ -891,7 +910,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 7);
@@ -930,7 +949,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 5);
@@ -962,7 +981,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 5);
@@ -996,7 +1015,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 2, reference.len()-2).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 2, reference.len()-2, 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
@@ -1027,7 +1046,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 2, reference.len()-1).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 2, reference.len()-1, 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 9);
@@ -1083,7 +1102,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, ref_start, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, ref_start, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
@@ -1106,7 +1125,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 1);
@@ -1123,7 +1142,7 @@ mod tests {
         let hom_variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants_with_hom(&reference, &variants, &hom_variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants_with_hom(&reference, &variants, &hom_variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 7);
@@ -1149,7 +1168,7 @@ mod tests {
         let variants = vec![Variant::new_snv(0, 0, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
@@ -1171,7 +1190,7 @@ mod tests {
         let variants = vec![Variant::new_snv(0, 2, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len()).unwrap();
+            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);

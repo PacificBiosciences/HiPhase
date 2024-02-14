@@ -73,10 +73,9 @@ impl ReadSegment {
                     } else {
                         // check for ambiguity
                         if alleles[i] == rsa {
-                            // they match, make sure quals do also
-                            // assert_eq!(quals[i], rs_quals[i]);
-                            // quals won't always match in local mode, lets default to the lower
-                            quals[i] = quals[i].min(rs_quals[i]);
+                            // quals won't always match in local mode
+                            // it's also possible to have one quality from global and one from local; lets change this to max
+                            quals[i] = quals[i].max(rs_quals[i]);
                             assert!(quals[i] > 0);
                         } else {
                             // they don't match, change to ambiguous

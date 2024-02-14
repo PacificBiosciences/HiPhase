@@ -171,7 +171,7 @@ impl BlockStatsCollector {
             for block in self.blocks.iter() {
                 if block.sample_name() == sample_name {
                     let chrom: String = block.get_chrom().to_string();
-                    blocks_by_chrom.entry(chrom).or_insert(vec![]).push(block.clone());
+                    blocks_by_chrom.entry(chrom).or_default().push(block.clone());
                     all_sample_blocks.push(block.clone());
                 }
             }
