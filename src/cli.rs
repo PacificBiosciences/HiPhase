@@ -3,7 +3,7 @@ use clap::Parser;
 use chrono::Datelike;
 use flate2::bufread::MultiGzDecoder;
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ lazy_static! {
 This program comes with ABSOLUTELY NO WARRANTY; it is intended for
 Research Use Only and not for use in diagnostic procedures.", chrono::Utc::now().year()))]
 pub struct Settings {
-    /// Input alignment file in BAM format.
+    /// Input alignment file in BAM format
     #[clap(required = true)]
     #[clap(short = 'b')]
     #[clap(long = "bam")]
@@ -34,14 +34,14 @@ pub struct Settings {
     #[clap(help_heading = Some("Input/Output"))]
     pub bam_filenames: Vec<PathBuf>,
 
-    /// Output haplotagged alignment file in BAM format.
+    /// Output haplotagged alignment file in BAM format
     #[clap(short = 'p')]
     #[clap(long = "output-bam")]
     #[clap(value_name = "BAM")]
     #[clap(help_heading = Some("Input/Output"))]
     pub output_bam_filenames: Vec<PathBuf>,
 
-    /// Input variant file in VCF format.
+    /// Input variant file in VCF format
     #[clap(required = true)]
     #[clap(short = 'c')]
     #[clap(long = "vcf")]
@@ -49,7 +49,7 @@ pub struct Settings {
     #[clap(help_heading = Some("Input/Output"))]
     pub vcf_filenames: Vec<PathBuf>,
 
-    /// Output phased variant file in VCF format.
+    /// Output phased variant file in VCF format
     #[clap(required = true)]
     #[clap(short = 'o')]
     #[clap(long = "output-vcf")]
@@ -112,14 +112,14 @@ pub struct Settings {
     #[clap(help_heading = Some("Input/Output"))]
     pub csi_index: bool,
 
-    /// Number of threads to use for phasing.
+    /// Number of threads to use for phasing
     #[clap(short = 't')]
     #[clap(long = "threads")]
     #[clap(value_name = "THREADS")]
     #[clap(default_value = "1")]
     pub threads: usize,
 
-    /// Enable verbose output.
+    /// Enable verbose output
     #[clap(short = 'v')]
     #[clap(long = "verbose")]
     #[clap(action = clap::ArgAction::Count)]
@@ -267,7 +267,9 @@ fn check_required_vcf(filename: &Path, label: &str) {
     let mut gz_decoder = MultiGzDecoder::new(file_reader);
     let mut small_buffer: [u8; 10] = [0; 10];
     match gz_decoder.read(&mut small_buffer) {
-        Ok(_) => {},
+        Ok(bytes_read) => {
+            trace!("Successfully read {bytes_read} bytes from VCF.")
+        },
         Err(e) => {
             if e.to_string() == "invalid gzip header" {
                 error!("Error while checking {filename:?}: {e}; is the VCF bgzipped?");
@@ -410,7 +412,7 @@ pub fn check_settings(mut settings: Settings) -> Settings {
     info!("Processing threads: {}", settings.threads);
     info!("I/O threads: {}", settings.io_threads.unwrap());
     if settings.csi_index {
-        info!("CSI indexing: enabled");
+        info!("CSI indexing: ENABLED");
     }
 
     //send the settings back

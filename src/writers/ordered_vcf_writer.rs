@@ -2,7 +2,7 @@
 use crate::block_gen::is_phasable_variant;
 use crate::phaser::PhaseResult;
 
-use log::{warn,debug,trace};
+use log::{debug, trace};
 use rust_htslib::bcf;
 use rust_htslib::bcf::Read;
 use rust_htslib::bcf::record::GenotypeAllele;
@@ -404,9 +404,9 @@ impl OrderedVcfWriter {
                 },
                 Err(e) => {
                     if final_position == 0 {
-                        warn!("Empty problem block received, no heterozygous variants on chromosome {}", self.current_chrom);
+                        debug!("Empty problem block received, no heterozygous variants on chromosome {}", self.current_chrom);
                     } else {
-                        warn!("Received \'{}\', while seeking to {}:{}-{} in vcf #{}, likely no variants present", e, self.current_chrom, start_pos, final_position, vcf_index);
+                        debug!("Received \'{}\', while seeking to {}:{}-{} in vcf #{}, likely no variants present", e, self.current_chrom, start_pos, final_position, vcf_index);
                     }
                 }
             }
