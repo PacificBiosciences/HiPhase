@@ -82,6 +82,11 @@ hiphase \
 [2023-02-02T20:40:11.347Z INFO  hiphase] All phase blocks finished successfully after 1605.008968506 seconds.
 ```
 
+## Recommended resources
+HiPhase has built in parallel processing via the `--threads` parameter.
+We recommend reserving 4 GB of memory per thread allocated to HiPhase.
+For example, most of our internal tests use 16 threads and reserve 64 GB of memory.
+
 # Common use cases
 ## Joint phasing small variants, structural variants, and tandem repeats
 To *jointly* phase small variants, structural variants, and tandem repeats, pass all VCF files to HiPhase and specify one output VCF file for each in the same order as input.

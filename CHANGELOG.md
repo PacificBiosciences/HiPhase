@@ -1,3 +1,8 @@
+# v1.4.1
+## Changes
+* Reclassifies warnings during VCF writing to debug
+* Adds a section to the quickstart guide on resource requirements
+
 # v1.4.0
 ## Changes
 * **Major changes to dual-mode allele assignment:** Prior to this version, global realignment would revert to local realignment if the CPU cost (in seconds) exceeded a user provided threshold. While this was useful for fast-tracking noisy phase blocks, it could lead to non-deterministic output as CPU costs can vary. The thresholding has been reworked such that global realignment will revert to local realignment *for an individual mapping* if the edit distance exceeds a user provided threshold (default: 500). Additionally, global realignment will revert to local realignment *for the remainder of a putative phase block* if too many reads have reverted to local realignment (default: 50%, minimum number of failures: 50 mappings). This has the following downstream impact on results:
