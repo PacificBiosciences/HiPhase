@@ -1,3 +1,7 @@
+# v1.4.2
+## Changes
+* Removes a 1 basepair shift from tandem repeat region calculation to support anchor base changes in TRGT v1.0.0; internal results are nearly identical before and after this change
+
 # v1.4.1
 ## Changes
 * Reclassifies warnings during VCF writing to debug
