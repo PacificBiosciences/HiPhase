@@ -1,6 +1,6 @@
 [package]
 name = "hiphase"
-version = "1.4.1"
+version = "1.4.2"
 authors = ["J. Matthew Holt <mholt@pacificbiosciences.com>"]
 description = "A tool for jointly phasing small, structural, and tandem repeat variants for PacBio sequencing data"
 edition = "2021"

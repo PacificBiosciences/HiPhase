@@ -452,10 +452,9 @@ pub fn solve_block(
             let start: i64 = variant.position();
             let ref_len: usize = variant.get_ref_len();
             let end: i64 = start + ref_len as i64;
-            // sometimes TRGT inserts the base before which will match an insertion and sometimes it won't - confirmed with Egor
-            // we can't really tell which is which though, so lets just substract 1 from the start and assume that's the best for now
-            // TODO: if TRGT adjusts to always have an anchor, we will need to drop the "-1" operation
-            tr_segments.insert((start-1)..end, 0);
+            // prior to TRGT v1.0.0: sometimes TRGT inserts the base before which will match an insertion and sometimes it wouldn't
+            // now there is always an anchor base, so we can safely just use start..end from the VCF directly
+            tr_segments.insert(start..end, 0);
         }
     }
 
