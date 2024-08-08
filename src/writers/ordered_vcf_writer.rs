@@ -308,7 +308,7 @@ impl OrderedVcfWriter {
                             // we have already written though, so don't write it again
                             continue;
                         }
-
+                        
                         // we now have to iterate over each sample and modify the entries as necessary
                         let vcf_sample_indices = &self.sample_indices[vcf_index];
                         let mut changes_made: bool = false;
@@ -323,16 +323,17 @@ impl OrderedVcfWriter {
                                 1 => {
                                     // TRGT can make single-allele GT calls, just copy it over as normal
                                     // it will not be modified below because it is a homozygous allele
-                                    alleles.push(genotype[0]);
+                                    alleles.push(i32::from(genotype[0]));
+                                    alleles.push(i32::MIN+1); // sentinel value for end
                                 },
                                 2 => {
                                     // this is 99.99999999% path
-                                    alleles.push(genotype[0]);
-                                    alleles.push(genotype[1]);
+                                    alleles.push(i32::from(genotype[0]));
+                                    alleles.push(i32::from(genotype[1]));
                                 },
                                 gt_len => {
                                     // we do not have 3+ GT entries implemented
-                                    bail!("Encountered GT of length {} at position {}", gt_len, record.pos())
+                                    bail!("Encountered GT of length {} at record {}", gt_len, record.desc())
                                 }
                             }
                         }
@@ -373,8 +374,8 @@ impl OrderedVcfWriter {
                                 } else {
                                     // we need to alter the genotypes for this sample to phased
                                     let sample_gt_offset: usize = 2 * sample_index;
-                                    alleles[sample_gt_offset] = GenotypeAllele::Unphased(h1 as i32);
-                                    alleles[sample_gt_offset + 1] = GenotypeAllele::Phased(h2 as i32);
+                                    alleles[sample_gt_offset] = i32::from(GenotypeAllele::Unphased(h1 as i32));
+                                    alleles[sample_gt_offset + 1] = i32::from(GenotypeAllele::Phased(h2 as i32));
 
                                     // the push_format_string expects &[u8] bytes so we have to:
                                     //   1. convert the output to a String
@@ -391,7 +392,7 @@ impl OrderedVcfWriter {
 
                         if changes_made {
                             // if we altered something, then alter the record and add PS
-                            record.push_genotypes(&alleles)?;
+                            record.push_format_integer(b"GT", &alleles)?;
                             record.push_format_string("PS".as_bytes(), &ps_blocks).unwrap();
                         }
                         if flagged_variants {

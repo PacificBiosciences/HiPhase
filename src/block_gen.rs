@@ -627,13 +627,18 @@ impl PhaseBlockIterator {
     /// # Arguments
     /// * `chrom` - the chromosome of the locus
     /// * `pos` - the position of the locus
-    fn get_longest_multispan(&self, chrom: &str, pos: u64) -> u64 {
+    fn get_longest_multispan(&self, chrom: &str, pos: u64) -> Result<u64, Box<dyn std::error::Error>> {
         use bio::bio_types::genome::AbstractInterval;
         use rust_htslib::bam::Read;
         let mut span_list: Vec<u64> = vec![];
-        for bam_ref in self.bam_readers.iter() {
+        for (bam_index, bam_ref) in self.bam_readers.iter().enumerate() {
             let mut bam = bam_ref.borrow_mut();
-            bam.fetch((chrom, pos, pos+1)).unwrap();
+            match bam.fetch((chrom, pos, pos+1)) {
+                Ok(()) => {},
+                Err(e) => {
+                    bail!("Error while fetching \"{}:{}\" in aligned file #{}: {}", chrom, pos, bam_index, e);
+                }
+            };
             
             // calling .records() is what is triggering the URL warning
             for read_entry in bam.records() {
@@ -656,10 +661,10 @@ impl PhaseBlockIterator {
 
         if span_list.len() < self.min_spanning_reads {
             // this is a sentinel indicating that the range is effectively empty
-            pos
+            Ok(pos)
         } else {
             span_list.sort();
-            span_list[span_list.len() - self.min_spanning_reads]
+            Ok(span_list[span_list.len() - self.min_spanning_reads])
         }
     }
 
@@ -891,7 +896,10 @@ impl Iterator for PhaseBlockIterator {
                             phase_block.add_locus_variant(&chrom_name, variant_pos, pop_index);
                             
                             // go ahead and run the max span calculation
-                            max_span = self.get_longest_multispan(&chrom_name, variant_pos);
+                            max_span = match self.get_longest_multispan(&chrom_name, variant_pos) {
+                                Ok(ms) => ms,
+                                Err(e) => return Some(Err(e))
+                            };
                             if max_span == variant_pos {
                                 // there are not enough reads overlapping this position, it will be unphased
                                 phase_block.set_unphased_block();
@@ -916,7 +924,10 @@ impl Iterator for PhaseBlockIterator {
                             }
                         } else {
                             //we check the reads from the most recent locus
-                            max_span = self.get_longest_multispan(&chrom_name, previous_pos);
+                            max_span = match self.get_longest_multispan(&chrom_name, previous_pos) {
+                                Ok(ms) => ms,
+                                Err(e) => return Some(Err(e))
+                            };
                             assert!(max_span != previous_pos);
                             if max_span > variant_pos {
                                 //new max span connects
