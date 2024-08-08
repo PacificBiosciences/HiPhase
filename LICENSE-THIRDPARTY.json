@@ -325,7 +325,7 @@
   },
   {
     "name": "deranged",
-    "version": "0.3.7",
+    "version": "0.3.11",
     "authors": "Jacob Pratt <jacob@jhpratt.dev>",
     "repository": "https://github.com/jhpratt/deranged",
     "license": "Apache-2.0 OR MIT",
@@ -496,7 +496,7 @@
   },
   {
     "name": "hiphase",
-    "version": "1.4.2",
+    "version": "1.4.3",
     "authors": "J. Matthew Holt <mholt@pacificbiosciences.com>",
     "repository": null,
     "license": null,
@@ -765,6 +765,15 @@
     "description": "Complex numbers implementation for Rust"
   },
   {
+    "name": "num-conv",
+    "version": "0.1.0",
+    "authors": "Jacob Pratt <jacob@jhpratt.dev>",
+    "repository": "https://github.com/jhpratt/num-conv",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "`num_conv` is a crate to convert between integer types without using `as` casts. This provides better certainty when refactoring, makes the exact behavior of code more explicit, and allows using turbofish syntax."
+  },
+  {
     "name": "num-integer",
     "version": "0.1.45",
     "authors": "The Rust Project Developers",
@@ -871,6 +880,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "A library to run the pkg-config system tool at build time in order to be used in Cargo build scripts."
+  },
+  {
+    "name": "powerfmt",
+    "version": "0.2.0",
+    "authors": "Jacob Pratt <jacob@jhpratt.dev>",
+    "repository": "https://github.com/jhpratt/powerfmt",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "`powerfmt` is a library that provides utilities for formatting values. This crate makes it     significantly easier to support filling to a minimum width with alignment, avoid heap     allocation, and avoid repetitive calculations."
   },
   {
     "name": "ppv-lite86",
@@ -1081,7 +1099,7 @@
   },
   {
     "name": "serde",
-    "version": "1.0.147",
+    "version": "1.0.205",
     "authors": "Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/serde-rs/serde",
     "license": "Apache-2.0 OR MIT",
@@ -1090,7 +1108,7 @@
   },
   {
     "name": "serde_derive",
-    "version": "1.0.147",
+    "version": "1.0.205",
     "authors": "Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>",
     "repository": "https://github.com/serde-rs/serde",
     "license": "Apache-2.0 OR MIT",
@@ -1216,7 +1234,7 @@
   },
   {
     "name": "time",
-    "version": "0.3.25",
+    "version": "0.3.36",
     "authors": "Jacob Pratt <open-source@jhpratt.dev>|Time contributors",
     "repository": "https://github.com/time-rs/time",
     "license": "Apache-2.0 OR MIT",
@@ -1225,7 +1243,7 @@
   },
   {
     "name": "time-core",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "authors": "Jacob Pratt <open-source@jhpratt.dev>|Time contributors",
     "repository": "https://github.com/time-rs/time",
     "license": "Apache-2.0 OR MIT",
@@ -1234,7 +1252,7 @@
   },
   {
     "name": "time-macros",
-    "version": "0.2.11",
+    "version": "0.2.18",
     "authors": "Jacob Pratt <open-source@jhpratt.dev>|Time contributors",
     "repository": "https://github.com/time-rs/time",
     "license": "Apache-2.0 OR MIT",

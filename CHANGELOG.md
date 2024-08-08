@@ -1,3 +1,8 @@
+# 1.4.3
+## Fixed
+* Replaced a panic caused by a chromosome appearing in a VCF but not in the BAM file with a more descriptive error message
+* Fixed an error caused by a multi-sample VCF with a mixture of haploid and diploid genotypes
+
 # v1.4.2
 ## Changes
 * Removes a 1 basepair shift from tandem repeat region calculation to support anchor base changes in TRGT v1.0.0; internal results are nearly identical before and after this change
