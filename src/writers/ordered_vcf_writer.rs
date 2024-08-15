@@ -97,6 +97,12 @@ impl OrderedVcfWriter {
             
             //now setup the outputs, we want to do the header stuff here also
             let mut output_header: bcf::header::Header = bcf::header::Header::from_template(&vcf_header);
+            
+            // we can remove any existing headers without crashing anything
+            output_header.remove_format(b"PS"); 
+            output_header.remove_format(b"PF");
+            
+            // add in the new headers
             let cli_string: String = std::env::args().collect::<Vec<String>>().join(" ");
             let cli_version: &str = &crate::cli::FULL_VERSION;
             output_header.push_record(format!(r#"##HiPhase_version="{cli_version}""#).as_bytes());
@@ -308,12 +314,16 @@ impl OrderedVcfWriter {
                             // we have already written though, so don't write it again
                             continue;
                         }
+
+                        // the record will get written, clear out all phasing information first
+                        strip_record_phasing(&mut record)?;
                         
                         // we now have to iterate over each sample and modify the entries as necessary
                         let vcf_sample_indices = &self.sample_indices[vcf_index];
                         let mut changes_made: bool = false;
 
-                        // initialize the alleles array to be the same, these may change inside the loop
+                        // initialize the alleles array to be the same as what's currently in the record; this is post-phase stripping
+                        // alleles may get overwritten following this loop depending on the success of the phasing
                         let mut alleles = vec![];
                         let record_gt = record.genotypes().unwrap();
                         for si in 0..record.sample_count() {
@@ -420,5 +430,141 @@ impl OrderedVcfWriter {
             self.current_pos = final_position+1;
         }
         Ok(())
+    }
+}
+
+/// This will remove all phasing information from a given VCF record.
+/// # Arguments
+/// * `record` - the VCF to strip all phasing from
+/// # Errors
+/// * if it fails to clear the PS tag
+/// * if it fails to parse genotypes
+/// * if it encounters any weird genotypes (we probably would fail before this)
+fn strip_record_phasing(record: &mut bcf::Record) -> Result<(), Box<dyn std::error::Error>> {
+    // first remove the "PS" tag
+    clear_format_tag(record, b"PS")?;
+    clear_format_tag(record, b"PF")?;
+
+    let record_gt = record.genotypes()?;
+    let mut alleles = vec![];
+    for si in 0..record.sample_count() {
+        let genotype = record_gt.get(si as usize);
+        match genotype.len() {
+            0 => bail!("Encountered empty genotype record at position {}", record.pos()),
+            1 => {
+                // TRGT can make single-allele GT calls, just copy it over as normal
+                // it will not be modified below because it is a homozygous allele
+                let g0 = unphase_genotype_allele(genotype[0]);
+                alleles.push(i32::from(g0));
+                alleles.push(i32::MIN+1); // sentinel value for end
+            },
+            2 => {
+                // this is 99.99999999% path
+                let g0 = i32::from(unphase_genotype_allele(genotype[0]));
+                let g1 = i32::from(unphase_genotype_allele(genotype[1]));
+                let min_value = g0.min(g1);
+                let max_value = g0.max(g1);
+                alleles.push(min_value);
+                alleles.push(max_value);
+            },
+            gt_len => {
+                // we do not have 3+ GT entries implemented
+                bail!("Encountered GT of length {} at record {}", gt_len, record.desc())
+            }
+        }
+    }
+    record.push_format_integer(b"GT", &alleles)?;
+
+    Ok(())
+}
+
+/// This will remove a specified format field from the provided record. 
+/// Other approaches seem to set it to "." instead of removing the field entirely.
+/// If the tag is absent (from this record or the entire file), this seemingly returns without error.
+/// # Arguments
+/// * `record` - the record to remove the tag from 
+/// * `tag` - the tag to remove, e.g. b"PS"
+/// # Errors
+/// * if we cannot remove the tag for some reason
+fn clear_format_tag(record: &mut bcf::Record, tag: &[u8]) -> Result<(), rust_htslib::errors::Error> {
+    let tag_c_str = std::ffi::CString::new(tag).unwrap();
+    unsafe {
+        if rust_htslib::htslib::bcf_update_format(
+            record.header().inner,
+            record.inner,
+            tag_c_str.into_raw(),
+            std::ptr::null() as *const ::std::os::raw::c_void,
+            0,
+            rust_htslib::htslib::BCF_HT_INT as i32
+        ) == 0 {
+            Ok(())
+        } else {
+            Err(rust_htslib::errors::Error::BcfSetTag { tag: std::str::from_utf8(tag).unwrap().to_owned() })
+        }
+    }
+}
+
+/// This will convert a genotype allele into an unphased version.
+/// # Arguments
+/// * `gt` - the genotype allele to unphase
+fn unphase_genotype_allele(gt: GenotypeAllele) -> GenotypeAllele {
+    match gt {
+        GenotypeAllele::Unphased(i) |
+        GenotypeAllele::Phased(i) => GenotypeAllele::Unphased(i),
+        GenotypeAllele::UnphasedMissing |
+        GenotypeAllele::PhasedMissing => GenotypeAllele::UnphasedMissing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_clear_record() {
+        let vcf_fn = PathBuf::from("./test_data/prephased_test/prephased.vcf");
+        let mut vcf_reader = bcf::Reader::from_path(&vcf_fn).unwrap();
+
+        // expectations for sample 1
+        let expected_gt1 = vec![
+            vec![GenotypeAllele::Unphased(0), GenotypeAllele::Unphased(1)],
+            vec![GenotypeAllele::Unphased(1), GenotypeAllele::Unphased(1)],
+            vec![GenotypeAllele::Unphased(1)],
+            vec![GenotypeAllele::UnphasedMissing, GenotypeAllele::Unphased(1)]
+        ];
+
+        // expectations for sample 2
+        let expected_gt2 = vec![
+            vec![GenotypeAllele::Unphased(0), GenotypeAllele::Unphased(1)],
+            vec![GenotypeAllele::Unphased(0), GenotypeAllele::Unphased(0)],
+            vec![GenotypeAllele::Unphased(1), GenotypeAllele::Unphased(2)],
+            vec![GenotypeAllele::UnphasedMissing, GenotypeAllele::Unphased(0)]
+        ];
+
+        for (record_result, (exp_gt1, exp_gt2)) in vcf_reader.records()
+            .zip(expected_gt1.iter().zip(expected_gt2.iter())) {
+            // load the record and strip out the phasing information
+            let mut record = record_result.unwrap();
+            println!("Handling {}", record.desc());
+            strip_record_phasing(&mut record).unwrap();
+            
+            // verify that PS tag is completely gone
+            let ps_tag_result = record.format(b"PS").integer();
+            assert!(ps_tag_result.is_err());
+            assert_eq!(ps_tag_result.err().unwrap(), rust_htslib::errors::Error::BcfMissingTag { tag: "PS".to_string(), record: record.desc() });
+
+            // verify that PF tag is completely gone
+            let pf_tag_result = record.format(b"PF").string();
+            assert!(pf_tag_result.is_err());
+            assert_eq!(pf_tag_result.err().unwrap(), rust_htslib::errors::Error::BcfMissingTag { tag: "PF".to_string(), record: record.desc() });
+
+            // make sure GT 1 matches our expectation, which will be unphased
+            let genotype1 = record.genotypes().unwrap().get(0);
+            assert_eq!(genotype1.as_slice(), exp_gt1.as_slice());
+            
+            // make sure GT 2 matches our expectation, which will be unphased
+            let genotype2 = record.genotypes().unwrap().get(1);
+            assert_eq!(genotype2.as_slice(), exp_gt2.as_slice());
+        }
     }
 }

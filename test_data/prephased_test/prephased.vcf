@@ -1,0 +1,23 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=RefCall,Description="Genotyping model thinks this site is reference.">
+##FILTER=<ID=LowQual,Description="Confidence in this variant being real is below calling threshold.">
+##FILTER=<ID=NoCall,Description="Site has depth=0 resulting in no call.">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End position (for use with symbolic alleles)">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Conditional genotype quality">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description="Minimum DP observed within the GVCF block.">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Read depth for each allele">
+##FORMAT=<ID=VAF,Number=A,Type=Float,Description="Variant allele fractions.">
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred-scaled genotype likelihoods rounded to the closest integer">
+##FORMAT=<ID=MED_DP,Number=1,Type=Integer,Description="Median DP observed within the GVCF block rounded to the nearest integer.">
+##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set identifier">
+##FORMAT=<ID=PF,Number=1,Type=String,Description="Phasing flag">
+##DeepVariant_version=1.3.0
+##contig=<ID=chr1,length=12>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	sample_name	sample_name2
+chr1	5	.	A	T	30	PASS	.	GT:PS:PF	0|1:5:test	1|0:5:.
+chr1	15	.	A	T	30	PASS	.	GT:PS	1|1:5	0|0:5
+chr1	25	.	A	T,C	30	PASS	.	GT:PS	1:5	2|1:5
+chr1	30	.	A	T	30	PASS	.	GT:PS	.|1:5	0|.:5
