@@ -337,3 +337,9 @@ Since TRGT calls often correspond to multiple small variant calls, the total num
 Additionally, this has the benefit of removing false heterozygous variants in the tandem repeat regions.
 This can have the side effect of (correctly) reducing block NG50 when those false variants are the only links between two otherwise unlinked phase blocks.
 Variants that are intentionally excluded from phasing this way will have a FORMAT `PF` tag of `TR_OVERLAP`.
+
+## Can I provide pre-existing phase information to HiPhase?
+Currently no, HiPhase will not use any pre-existing phase information in the provided VCF or BAM files.
+To prevent accidental mis-interpretation of results, HiPhase will remove or overwrite any existing phase information from the input files prior to writing the output phased VCFs and/or BAMs.
+For VCF files, this includes the "FORMAT:GT" (genotype), "FORMAT:PS" (phase set), and "FORMAT:PF" (phase filter) fields.
+For BAM files, this includes the "HP" (haplotype) and "PS" (phase set) tags.

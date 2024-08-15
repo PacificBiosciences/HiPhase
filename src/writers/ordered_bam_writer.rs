@@ -221,7 +221,8 @@ impl OrderedBamWriter {
                                             bam_writer.write(&record)?;
                                         },
                                         None => {
-                                            // no match, so just copy the read over
+                                            // no match, so just copy the read over after stripping any phase information
+                                            strip_record_phasing(&mut record)?;
                                             bam_writer.write(&record)?;
                                         }
                                     };
@@ -277,7 +278,7 @@ impl OrderedBamWriter {
                 Ok(()) => {
                     for record_result in bam_reader.records() {
                         // set up the record for the new BAM file
-                        let record = record_result?;
+                        let mut record = record_result?;
                         let record_pos = record.pos();
                         if record_pos < start_pos as i64 {
                             // this can happen when you have reads that overlap the location but don't start *after* the position
@@ -286,6 +287,7 @@ impl OrderedBamWriter {
                         }
 
                         // nothing left should be tagged
+                        strip_record_phasing(&mut record)?;
                         bam_writer.write(&record)?;
     
                         // adding this last bit should prevent double writes by accident from a user
@@ -336,9 +338,10 @@ impl OrderedBamWriter {
                     Ok(()) => {
                         for record_result in bam_reader.records() {
                             // set up the record for the new BAM file
-                            let record = record_result?;
+                            let mut record = record_result?;
                             
                             // nothing left should be tagged
+                            strip_record_phasing(&mut record)?;
                             bam_writer.write(&record)?;
                         }
                     },
@@ -351,5 +354,63 @@ impl OrderedBamWriter {
 
         // if we make it here, everything should be good
         Ok(())
+    }
+}
+
+/// Removes the phase tags that HiPhase will normally write from a record.
+/// This is so we erase anything that did not come from the tool.
+fn strip_record_phasing(record: &mut bam::Record) -> Result<(), rust_htslib::errors::Error> {
+    // much simpler than the VCF version since there is no multi-sample to worry about, just drop these tags
+    match record.remove_aux(b"HP") {
+        // either it was remove or was not there to begin with
+        Ok(()) |
+        Err(rust_htslib::errors::Error::BamAuxTagNotFound) => {},
+        // some other crazy error
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    match record.remove_aux(b"PS") {
+        // either it was remove or was not there to begin with
+        Ok(()) |
+        Err(rust_htslib::errors::Error::BamAuxTagNotFound) => Ok(()),
+        // some other crazy error
+        Err(e) => Err(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    /// Simple empty bam record creator; if we just use a "new()" record, htslib is unhappy when we access Aux
+    fn dummy_bam_record() -> bam::Record {
+        let mut record = bam::Record::new();
+        record.set(
+            b"test_qname",
+            None,
+            b"A",
+            &[255]
+        );
+        record
+    }
+
+    #[test]
+    fn test_clear_record() {
+        // make sure running on a record without the tags is fine (this will be *most* cases)
+        let mut record = dummy_bam_record();
+        strip_record_phasing(&mut record).unwrap();
+
+        // create a record with the tags
+        let mut record = dummy_bam_record();
+        record.push_aux(b"HP", bam::record::Aux::U8(1)).unwrap();
+        record.push_aux(b"PS", bam::record::Aux::I32(42)).unwrap();
+        assert!(record.aux(b"HP").is_ok());
+        assert!(record.aux(b"PS").is_ok());
+
+        // strip them and verify they are gone
+        strip_record_phasing(&mut record).unwrap();
+        assert_eq!(record.aux(b"HP").err().unwrap(), rust_htslib::errors::Error::BamAuxTagNotFound);
+        assert_eq!(record.aux(b"PS").err().unwrap(), rust_htslib::errors::Error::BamAuxTagNotFound);
     }
 }

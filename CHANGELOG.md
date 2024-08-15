@@ -1,4 +1,10 @@
-# 1.4.3
+# v1.4.4
+## Fixed
+* Fixed an error where phasing information that was present in input files would be copied through to output files if it was not overwritten by HiPhase phasing results. HiPhase will now automatically remove this phasing information to prevent accidental mixing of phase results. 
+  * For VCF files, any unphased genotypes will be switched to unphased and sorted by allele index (e.g. 1|0 -> 0/1). The "FORMAT:PS" and "FORMAT:PF" tags will either be removed entirely if the whole record is unphased or set to "." for partially phased records.
+  * For BAM files, the "HP" and "PS" tags will be removed for any unphased records.
+
+# v1.4.3
 ## Fixed
 * Replaced a panic caused by a chromosome appearing in a VCF but not in the BAM file with a more descriptive error message
 * Fixed an error caused by a multi-sample VCF with a mixture of haploid and diploid genotypes
