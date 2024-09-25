@@ -206,26 +206,25 @@ impl OrderedBamWriter {
                                         continue;
                                     }
 
-                                    // this may need to be <=, hard to tell yet
+                                    // quick sanity check
                                     assert!(record_pos <= end_pos as i64);
+
+                                    // no matter what, we need to strip any existing phase information from the record
+                                    strip_record_phasing(&mut record)?;
 
                                     // now check if the read name has a lookup
                                     let read_name = std::str::from_utf8(record.qname()).unwrap();
-                                    match read_block_lookup.get(read_name) {
-                                        Some((phase_block_id, haplotag)) => {
-                                            // we have a match, modify phase info
-                                            // phase_block_id is 0-based, so add 1 to it
-                                            record.push_aux("PS".as_bytes(), bam::record::Aux::I32((phase_block_id + 1).try_into()?))?;
-                                            // haplotag is 0/1 and we want 1/2 in the BAM, so add 1 to it
-                                            record.push_aux("HP".as_bytes(), bam::record::Aux::U8((haplotag + 1).try_into()?))?;
-                                            bam_writer.write(&record)?;
-                                        },
-                                        None => {
-                                            // no match, so just copy the read over after stripping any phase information
-                                            strip_record_phasing(&mut record)?;
-                                            bam_writer.write(&record)?;
-                                        }
+
+                                    if let Some((phase_block_id, haplotag)) = read_block_lookup.get(read_name) {
+                                        // we have a match, modify phase info
+                                        // phase_block_id is 0-based, so add 1 to it
+                                        record.push_aux("PS".as_bytes(), bam::record::Aux::I32((phase_block_id + 1).try_into()?))?;
+                                        // haplotag is 0/1 and we want 1/2 in the BAM, so add 1 to it
+                                        record.push_aux("HP".as_bytes(), bam::record::Aux::U8((haplotag + 1).try_into()?))?;
+                                    } else {
+                                        // no haplotag information for this read, the record was already stripped; no-op
                                     };
+                                    bam_writer.write(&record)?;
                                 }
                             },
                             Err(e) => {
@@ -233,7 +232,6 @@ impl OrderedBamWriter {
                                     warn!("Empty problem block received, no read mappings on chromosome {}", chrom_result);
                                 } else {
                                     warn!("Received \'{}\', while seeking to {}:{}-{} in bam #{}, likely no reads in region", e, chrom_result, start_pos, end_pos, bam_index);
-                                    //return Err(e);
                                 }
                             }
                         };

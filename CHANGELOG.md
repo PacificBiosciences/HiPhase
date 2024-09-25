@@ -1,3 +1,7 @@
+# v1.4.5
+## Fixed
+* Fixed an error where BAM phase tags were not always properly removed prior to re-tagging, leading to a run-time error and exit
+
 # v1.4.4
 ## Fixed
 * Fixed an error where phasing information that was present in input files would be copied through to output files if it was not overwritten by HiPhase phasing results. HiPhase will now automatically remove this phasing information to prevent accidental mixing of phase results. 
