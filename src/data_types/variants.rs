@@ -1,4 +1,5 @@
 
+use crate::data_types::read_segments::AlleleType;
 use crate::sequence_alignment::edit_distance;
 
 use log::trace;
@@ -609,7 +610,7 @@ impl Variant {
     /// Returns a tuple of the (allele chosen, min edit distance, other edit distance).
     /// # Arguments
     /// * `allele` - the allele sequence to compare to our internal alleles
-    pub fn closest_allele(&self, allele: &[u8]) -> (u8, usize, usize) {
+    pub fn closest_allele(&self, allele: &[u8]) -> (AlleleType, usize, usize) {
         self.closest_allele_clip(allele, 0, 0)
     }
 
@@ -620,7 +621,7 @@ impl Variant {
     /// # Arguments
     /// * `allele` - the allele sequence to compare to our internal alleles
     /// * `offset` - will skip this many bases internally for calculating edit distance
-    pub fn closest_allele_clip(&self, allele: &[u8], head_clip: usize, tail_clip: usize) -> (u8, usize, usize) {
+    pub fn closest_allele_clip(&self, allele: &[u8], head_clip: usize, tail_clip: usize) -> (AlleleType, usize, usize) {
         assert!(head_clip <= self.prefix_len);
         assert!(tail_clip <= self.postfix_len);
         let d0: usize = edit_distance(allele, &self.allele0[head_clip..(self.allele0.len() - tail_clip)]);
@@ -631,11 +632,11 @@ impl Variant {
         trace!("a1 {:?} => {}", &self.allele1[head_clip..(self.allele1.len() - tail_clip)], d1);
         match d0.cmp(&d1) {
             // d0 is less, return that
-            Ordering::Less => (0, d0, d1),
+            Ordering::Less => (AlleleType::Reference, d0, d1),
             // d1 is less, return that
-            Ordering::Greater => (1, d1, d0),
+            Ordering::Greater => (AlleleType::Alternate, d1, d0),
             // equidistant, so undetermined
-            Ordering::Equal => (2, d0, d1)
+            Ordering::Equal => (AlleleType::Ambiguous, d0, d1)
         }
     }
 
@@ -645,12 +646,12 @@ impl Variant {
     /// * `index` - must be 0, 1, or 2 (unknown)
     /// # Panics
     /// * if anything other than 0, 1, or 2 is provided
-    pub fn convert_index(&self, index: u8) -> u8 {
-        if index == 0 {
+    pub fn convert_index(&self, index: AlleleType) -> u8 {
+        if index == AlleleType::Reference {
             self.index_allele0
-        } else if index == 1 {
+        } else if index == AlleleType::Alternate {
             self.index_allele1
-        } else if index == 2 {
+        } else if index == AlleleType::Ambiguous {
             // we just need some indicator that it's undetermined, this will work for now
             u8::MAX  
         } else {
@@ -677,9 +678,9 @@ mod tests {
         assert_eq!(variant.match_allele(b"C"), 1);
         assert_eq!(variant.match_allele(b"G"), 2);
         assert_eq!(variant.match_allele(b"T"), 2);
-        assert_eq!(variant.convert_index(0), 0);
-        assert_eq!(variant.convert_index(1), 1);
-        assert_eq!(variant.convert_index(2), u8::MAX);
+        assert_eq!(variant.convert_index(AlleleType::Reference), 0);
+        assert_eq!(variant.convert_index(AlleleType::Alternate), 1);
+        assert_eq!(variant.convert_index(AlleleType::Ambiguous), u8::MAX);
     }
 
     #[test]
@@ -709,8 +710,8 @@ mod tests {
         assert_eq!(variant.match_allele(b"ACCC"), 2);
         assert_eq!(variant.match_allele(b"C"), 0);
         assert_eq!(variant.match_allele(b"A"), 1);
-        assert_eq!(variant.convert_index(0), 1);
-        assert_eq!(variant.convert_index(1), 2);
+        assert_eq!(variant.convert_index(AlleleType::Reference), 1);
+        assert_eq!(variant.convert_index(AlleleType::Alternate), 2);
     }
 
     #[test]
@@ -834,13 +835,13 @@ mod tests {
         assert_eq!(variant.match_allele(b"AG"), 2);
 
         // inexact without the reference data will return weird results
-        assert_eq!(variant.closest_allele(b"A"), (0, 5, 7));
-        assert_eq!(variant.closest_allele(b"AGT"), (0, 4, 5));
-        assert_eq!(variant.closest_allele(b"AG"), (0, 4, 6));
+        assert_eq!(variant.closest_allele(b"A"), (AlleleType::Reference, 5, 7));
+        assert_eq!(variant.closest_allele(b"AGT"), (AlleleType::Reference, 4, 5));
+        assert_eq!(variant.closest_allele(b"AG"), (AlleleType::Reference, 4, 6));
 
         // now lets inexact with the extensions
-        assert_eq!(variant.closest_allele(b"ACAGGC"), (0, 0, 2));
-        assert_eq!(variant.closest_allele(b"ACAGTGGC"), (1, 0, 2));
-        assert_eq!(variant.closest_allele(b"ACAGGGC"), (2, 1, 1));
+        assert_eq!(variant.closest_allele(b"ACAGGC"), (AlleleType::Reference, 0, 2));
+        assert_eq!(variant.closest_allele(b"ACAGTGGC"), (AlleleType::Alternate, 0, 2));
+        assert_eq!(variant.closest_allele(b"ACAGGGC"), (AlleleType::Ambiguous, 1, 1));
     }
 }

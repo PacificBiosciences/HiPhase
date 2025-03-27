@@ -1,4 +1,5 @@
 
+use crate::data_types::read_segments::AlleleType;
 use crate::data_types::variants::Variant;
 
 use bit_vec::BitVec;
@@ -213,7 +214,7 @@ impl WFAGraph {
             }
 
             // now add the alt allele(s)
-            if variant.convert_index(0) != 0 {
+            if variant.convert_index(AlleleType::Reference) != 0 {
                 // allele0 is an alt, so this must be multi-allelic; basically do the same thing we would do for allele1
                 // add the sequence exactly with just the immediately upstream reference node
                 let alt_sequence: Vec<u8> = variant.get_truncated_allele0().to_vec();

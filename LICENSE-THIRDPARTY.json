@@ -486,6 +486,15 @@
     "description": "heck is a case conversion library."
   },
   {
+    "name": "heck",
+    "version": "0.5.0",
+    "authors": null,
+    "repository": "https://github.com/withoutboats/heck",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "heck is a case conversion library."
+  },
+  {
     "name": "hermit-abi",
     "version": "0.1.19",
     "authors": "Stefan Lankes",
@@ -496,7 +505,7 @@
   },
   {
     "name": "hiphase",
-    "version": "1.4.5",
+    "version": "1.5.0",
     "authors": "J. Matthew Holt <mholt@pacificbiosciences.com>",
     "repository": null,
     "license": null,
@@ -1161,8 +1170,26 @@
     "description": "Helpful macros for working with enums and strings"
   },
   {
+    "name": "strum",
+    "version": "0.27.1",
+    "authors": "Peter Glotfelty <peter.glotfelty@microsoft.com>",
+    "repository": "https://github.com/Peternator7/strum",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Helpful macros for working with enums and strings"
+  },
+  {
     "name": "strum_macros",
     "version": "0.24.3",
+    "authors": "Peter Glotfelty <peter.glotfelty@microsoft.com>",
+    "repository": "https://github.com/Peternator7/strum",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Helpful macros for working with enums and strings"
+  },
+  {
+    "name": "strum_macros",
+    "version": "0.27.1",
     "authors": "Peter Glotfelty <peter.glotfelty@microsoft.com>",
     "repository": "https://github.com/Peternator7/strum",
     "license": "MIT",

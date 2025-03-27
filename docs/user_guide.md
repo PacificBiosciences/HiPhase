@@ -84,8 +84,9 @@ hiphase \
 
 ## Recommended resources
 HiPhase has built in parallel processing via the `--threads` parameter.
-We recommend reserving 4 GB of memory per thread allocated to HiPhase.
+For a typical human whole genome with ~30x coverage, we recommend reserving 4 GB of memory per thread allocated to HiPhase.
 For example, most of our internal tests use 16 threads and reserve 64 GB of memory.
+Both memory and compute time scale with the number of heterozygous variants and reads in a dataset, so samples with significantly higher heterozygosity or sequencing depth than a typical 30x human genome may require more resources.
 
 # Common use cases
 ## Joint phasing small variants, structural variants, and tandem repeats
