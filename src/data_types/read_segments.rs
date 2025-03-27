@@ -1,28 +1,19 @@
 
 use std::ops::Range;
 
+/// Types of alleles that are used for phasing
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, strum_macros::FromRepr)]
 pub enum AlleleType {
+    /// Matches the "Reference" allele; this may not actually be reference in a multi-allelic site
     Reference=0,
+    /// Matches the "Alternate" allele at a site
     Alternate=1,
+    /// Typically means that it equally matches both possible alleles
     Ambiguous=2,
+    /// Indicates that the type cannot be determined due to lack of overlap
     NoOverlap=3
 }
-
-/*
-impl From<u8> for AlleleType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => AlleleType::Reference,
-            1 => AlleleType::Alternate,
-            2 => AlleleType::Ambiguous,
-            3 => AlleleType::NoOverlap,
-            _ => AlleleType::NoOverlap
-        }
-    }
-}
-*/
 
 /// Container for a read segment that has been converted into a variant representation
 #[derive(Clone, Debug, Eq, PartialEq)]
