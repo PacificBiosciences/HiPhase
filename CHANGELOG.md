@@ -1,3 +1,9 @@
+# v1.5.0
+## Changes
+* Reduced memory footprint for large putative phase blocks by adjusting algorithms for storing read segment variants. Overall, this change has a negligible impact on memory usage for a typical human WGS dataset. However, sample types with much higher heterozygous variants per phase block (e.g., mouse) have significantly less peak memory usage (>80% reduction on tests).
+* Minor tweaks to phasing methods to reduce overhead of tracking candidate phase solutions
+* Internal results are highly similar, but not identical, to results for v1.4.5
+
 # v1.4.5
 ## Fixed
 * Fixed an error where BAM phase tags were not always properly removed prior to re-tagging, leading to a run-time error and exit

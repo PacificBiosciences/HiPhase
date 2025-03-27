@@ -1,5 +1,6 @@
 
 use crate::block_gen::is_phasable_variant;
+use crate::data_types::read_segments::AlleleType;
 use crate::phaser::PhaseResult;
 
 use log::{debug, trace};
@@ -222,7 +223,7 @@ impl OrderedVcfWriter {
                         for (haplotype_index, &h1_index) in phase_result.haplotype_1.iter().enumerate() {
                             if vcf_index == phase_result.variants[haplotype_index].get_vcf_index() {
                                 // h1 and h2 are just internal representations
-                                let h2_index: u8 = phase_result.haplotype_2[haplotype_index];
+                                let h2_index: AlleleType = phase_result.haplotype_2[haplotype_index];
 
                                 // convert them to the file representations where possible
                                 let h1 = phase_result.variants[haplotype_index].convert_index(h1_index);

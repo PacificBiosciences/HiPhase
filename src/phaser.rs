@@ -1,7 +1,7 @@
 
 use crate::astar_phaser;
 use crate::block_gen::{PhaseBlock, is_phasable_variant, get_variant_type};
-use crate::data_types::read_segments::ReadSegment;
+use crate::data_types::read_segments::{AlleleType, ReadSegment};
 use crate::data_types::reference_genome::ReferenceGenome;
 use crate::data_types::variants::{Variant, VariantType};
 use crate::read_parsing;
@@ -329,9 +329,9 @@ pub struct PhaseResult {
     /// The variants contained in the phase block.
     pub variants: Vec<Variant>,
     /// The first haplotype in the solution.
-    pub haplotype_1: Vec<u8>,
+    pub haplotype_1: Vec<AlleleType>,
     /// The second haplotype in the solution.
-    pub haplotype_2: Vec<u8>,
+    pub haplotype_2: Vec<AlleleType>,
     /// Store the phase block ID of the variant
     pub block_ids: Vec<usize>,
     /// Stores all non-empty sub-blocks
@@ -349,8 +349,8 @@ pub struct PhaseResult {
 /// * `haplotype_2` - the second haplotype in the solution
 fn get_solution_span_counts(
     read_segments: &IntervalTree<usize, ReadSegment>,
-    haplotype_1: &[u8],
-    haplotype_2: &[u8]
+    haplotype_1: &[AlleleType],
+    haplotype_2: &[AlleleType]
 ) -> Vec<usize> {
     // this will store the total spanning reads ignoring any homozygous or unsolved variants
     assert_eq!(haplotype_1.len(), haplotype_2.len());
@@ -363,7 +363,7 @@ fn get_solution_span_counts(
         let rs = rs_interval.data();
 
         // the range returns [first_allele, last_allele+1), we need to basically remove the +1 here since we're talking junctures
-        let mut juncture_range = rs.get_range();
+        let mut juncture_range = rs.region().clone();
         juncture_range.end -= 1;
 
         // if any of the head variants were converted to homozygous, do not include because they don't provide spanning evidence anymore
@@ -579,7 +579,7 @@ pub fn solve_block(
     for (i, variant) in variant_calls.iter().enumerate() {
         let h1 = astar_result.haplotype_1[i];
         let h2 = astar_result.haplotype_2[i];
-        if h1 < 2 && h2 < 2 && h1 != h2 {
+        if h1 < AlleleType::Ambiguous && h2 < AlleleType::Ambiguous && h1 != h2 {
             // this is a heterozygous variant in our result
             if current_tag != block_tags[i] {
                 if current_block.get_num_variants() > 0 {
@@ -678,8 +678,8 @@ pub fn create_unphased_result(phase_problem: &PhaseBlock) -> (PhaseResult, Haplo
     let phase_result: PhaseResult = PhaseResult {
         phase_block: phase_problem.clone(),
         variants: variant_calls,
-        haplotype_1: vec![0; num_variants],
-        haplotype_2: vec![0; num_variants],
+        haplotype_1: vec![AlleleType::Reference; num_variants],
+        haplotype_2: vec![AlleleType::Reference; num_variants],
         block_ids: vec![phase_problem.get_start() as usize; num_variants],
         sub_phase_blocks: vec![], // empty because this is not getting treated as a block
         read_statistics: None,
@@ -713,7 +713,7 @@ pub struct HaplotagResult {
 /// * the block breaks is not 1 less length than the variant calls
 pub fn haplotag_reads(
     read_segments: IntervalTree<usize, ReadSegment>, 
-    haplotype_1: &[u8], haplotype_2: &[u8], block_tags: &[usize]
+    haplotype_1: &[AlleleType], haplotype_2: &[AlleleType], block_tags: &[usize]
 ) -> HashMap<String, (usize, usize)> {
     // now do the tagging
     let mut haplotagged_reads: HashMap<String, (usize, usize)> = Default::default();
@@ -731,10 +731,10 @@ pub fn haplotag_reads(
         if haplotag != 2 {
             // we can resolve to a haplotype, now get the phase block index
             // find the first resolved variant in our read segment
-            let mut first_variant: usize = rs.first_allele();
+            let mut first_variant: usize = rs.region().start;
 
             // while the haplotypes are equal there OR the variant is not resolved (which can happen sometimes)
-            while haplotype_1[first_variant] == haplotype_2[first_variant] || rs.alleles()[first_variant] >= 2 {
+            while haplotype_1[first_variant] == haplotype_2[first_variant] || rs.allele(first_variant) >= AlleleType::Ambiguous {
                 first_variant += 1;
             }
             let phase_block: usize = block_tags[first_variant];
@@ -755,17 +755,17 @@ mod tests {
 
     #[test]
     fn test_get_solution_span_counts() {
-        let haplotype_1 = vec![0, 1, 1, 0, 0, 0];
-        let haplotype_2 = vec![1, 1, 1, 1, 0, 1];
+        let haplotype_1: Vec<AlleleType> = vec![0, 1, 1, 0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect();
+        let haplotype_2: Vec<AlleleType> = vec![1, 1, 1, 1, 0, 1].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect();
         let test_reads = vec![
-            ReadSegment::new("r1".to_string(), vec![0, 0, 0, 0, 0, 0], vec![1, 1, 1, 1, 1, 1]), // adds 1 to everything
-            ReadSegment::new("r2".to_string(), vec![2, 2, 2, 1, 1, 2], vec![0, 0, 0, 1, 1, 0]), // one allele is a hom, so this does nothing
-            ReadSegment::new("r3".to_string(), vec![1, 1, 1, 1, 2, 2], vec![1, 1, 1, 1, 0, 0]), // adds 1 to first 3
-            ReadSegment::new("r4".to_string(), vec![2, 1, 1, 1, 1, 1], vec![0, 1, 1, 1, 1, 1]), // adds 1 to last 2
+            ReadSegment::new("r1".to_string(), vec![0, 0, 0, 0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![1, 1, 1, 1, 1, 1]), // adds 1 to everything
+            ReadSegment::new("r2".to_string(), vec![3, 3, 3, 1, 1, 3].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![0, 0, 0, 1, 1, 0]), // one allele is a hom, so this does nothing
+            ReadSegment::new("r3".to_string(), vec![1, 1, 1, 1, 3, 3].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![1, 1, 1, 1, 0, 0]), // adds 1 to first 3
+            ReadSegment::new("r4".to_string(), vec![3, 1, 1, 1, 1, 1].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![0, 1, 1, 1, 1, 1]), // adds 1 to last 2
         ];
         let mut read_segments: IntervalTree<usize, ReadSegment> = Default::default();
         for rs in test_reads.into_iter() {
-            let rs_range = rs.get_range();
+            let rs_range = rs.region().clone();
             read_segments.insert(rs_range, rs);
         }
         let expected_result: Vec<usize> = vec![2, 2, 2, 2, 2];
@@ -776,20 +776,20 @@ mod tests {
 
     #[test]
     fn test_haplotag_reads() {
-        let haplotype_1 = vec![0, 0, 0, 0, 0, 0];
-        let haplotype_2 = vec![1, 1, 1, 1, 1, 1];
+        let haplotype_1: Vec<AlleleType> = vec![0, 0, 0, 0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect();
+        let haplotype_2: Vec<AlleleType> = vec![1, 1, 1, 1, 1, 1].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect();
         let block_tags = vec![0, 0, 0, 3, 3, 5];
         let test_reads = vec![
-            ReadSegment::new("r1".to_string(), vec![0, 0, 0, 0, 0, 0], vec![1, 1, 1, 1, 1, 1]),
-            ReadSegment::new("r2".to_string(), vec![2, 2, 2, 1, 1, 2], vec![0, 0, 0, 1, 1, 0]),
-            ReadSegment::new("r3".to_string(), vec![2, 2, 2, 1, 0, 2], vec![0, 0, 0, 1, 1, 0]),
-            ReadSegment::new("r4".to_string(), vec![2, 2, 2, 1, 0, 1], vec![0, 0, 0, 1, 1, 1]),
-            ReadSegment::new("r5".to_string(), vec![2, 2, 2, 1, 0, 2], vec![0, 0, 0, 2, 1, 0]),
+            ReadSegment::new("r1".to_string(), vec![0, 0, 0, 0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![1, 1, 1, 1, 1, 1]),
+            ReadSegment::new("r2".to_string(), vec![2, 2, 2, 1, 1, 2].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![0, 0, 0, 1, 1, 0]),
+            ReadSegment::new("r3".to_string(), vec![2, 2, 2, 1, 0, 2].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![0, 0, 0, 1, 1, 0]),
+            ReadSegment::new("r4".to_string(), vec![2, 2, 2, 1, 0, 1].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![0, 0, 0, 1, 1, 1]),
+            ReadSegment::new("r5".to_string(), vec![2, 2, 2, 1, 0, 2].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![0, 0, 0, 2, 1, 0]),
         ];
 
         let mut read_segments: IntervalTree<usize, ReadSegment> = Default::default();
         for rs in test_reads.into_iter() {
-            let rs_range = rs.get_range();
+            let rs_range = rs.region().clone();
             read_segments.insert(rs_range, rs);
         }
 

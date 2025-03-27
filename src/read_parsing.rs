@@ -1,6 +1,6 @@
 
 use crate::block_gen::{PhaseBlock, filter_out_alignment_record};
-use crate::data_types::read_segments::ReadSegment;
+use crate::data_types::read_segments::{AlleleType, ReadSegment};
 use crate::data_types::reference_genome::ReferenceGenome;
 use crate::data_types::variants::{Variant, VariantType};
 use crate::wfa_graph::{NodeAlleleMap, WFAGraph, WFAGraphError, WFAResult};
@@ -95,14 +95,14 @@ pub fn load_read_segments(
         let collapsed_read: ReadSegment = ReadSegment::collapse(read_group);
         let num_set: usize = collapsed_read.get_num_set();
         if num_set >= min_matched_alleles {
-            let segment_range = collapsed_read.get_range();
+            let segment_range = collapsed_read.region().clone();
             read_segments.insert(segment_range, collapsed_read);
             joint_stats.increase_num_reads(read_group.len() as u64);
         } else {
             joint_stats.increase_skipped_reads(read_group.len() as u64);
             if num_set > 0 {
                 // even though this won't be used for phasing, it CAN be phased
-                let segment_range = collapsed_read.get_range();
+                let segment_range = collapsed_read.region().clone();
                 phasable_segments.insert(segment_range, collapsed_read);
             }
         }
@@ -118,7 +118,7 @@ pub fn load_read_segments(
 /// # Arguments
 /// * `read` - the record to perform local realignment on
 /// * `variant_calls` - the variants to label
-fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>, Vec<u8>, ReadStats) {
+fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<AlleleType>, Vec<u8>, ReadStats) {
     use rust_htslib::bam::ext::BamRecordExtensions;
     
     let num_variants: usize = variant_calls.len();
@@ -153,7 +153,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
     assert_eq!(read_sequence.len(), read_qualities.len());
 
     //we will populate these with the variant level info
-    let mut alleles: Vec<u8> = Vec::<u8>::with_capacity(num_variants);
+    let mut alleles: Vec<AlleleType> = Vec::<AlleleType>::with_capacity(num_variants);
     let mut quals: Vec<u8> = Vec::<u8>::with_capacity(num_variants);
     let mut num_overlaps: usize = 0;
     let mut last_deletion_end: usize = 0;
@@ -172,7 +172,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
         let vt_index = variant_type as usize;
 
         // regardless of variant type, we MUST populate these in the following branching logic
-        let mut allele: u8;
+        let mut allele: AlleleType;
         let qual: u8;
         let exact_allele: bool;
         let overlaps_allele: bool;
@@ -180,7 +180,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
         if variant.is_ignored() {
             // this variant is one marked to ignored, lets set it to undefined as opposed to ambiguous
             trace!("\tMarking as undefined allele because it is flagged to be ignored");
-            allele = 3;
+            allele = AlleleType::NoOverlap;
             qual = MISSING_QUAL;
             exact_allele = false;
             overlaps_allele = false;
@@ -188,7 +188,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
             // check if this is within a region we have decided is a deleted
             trace!("\tMarking as unknown allele because it overlaps detected SV deletion");
             // if the 0-allele is reference, mark as 0, else mark as ambiguous because it's multi-allelic call
-            allele = 2;
+            allele = AlleleType::Ambiguous;
             qual = MISSING_QUAL;
             exact_allele = false;
             overlaps_allele = true;
@@ -277,8 +277,8 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                             trace!("\t{}..{} = {:?} {:?}; next = {} {}", ss, se, &read_sequence[ss..se], &read_qualities[ss..se], read_sequence[se], read_qualities[se]);
                             
                             let edit_distance: usize;
-                            allele = variant.match_allele(&read_sequence[ss..se]);
-                            if allele == 2 {
+                            allele = AlleleType::from_repr(variant.match_allele(&read_sequence[ss..se])).unwrap_or(AlleleType::NoOverlap);
+                            if allele == AlleleType::Ambiguous {
                                 // no exact match, do inexact matching
                                 (allele, edit_distance, _) = variant.closest_allele_clip(&read_sequence[ss..se], start_clip - 1, end_clip - 1);
                                 exact_allele = false;
@@ -327,10 +327,10 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                             qual = (baseline_quality as f64 * qual_factor).max(1.0) as u8;
                             
                             overlaps_allele = true;
-                            trace!("\tallele = {}, qual = {}, ED = {}", allele, qual, edit_distance);
+                            trace!("\tallele = {:?}, qual = {}, ED = {}", allele, qual, edit_distance);
                         } else {
                             trace!("\tfailed allele match for ref extension");
-                            allele = 2;
+                            allele = AlleleType::Ambiguous;
                             qual = MISSING_QUAL;
                             exact_allele = false;
                             overlaps_allele = true;
@@ -340,12 +340,12 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                         if aligned_range.contains(&variant_pos) {
                             trace!("\tOverlap, no position");
                             overlaps_allele = true;
-                            allele = 2;
+                            allele = AlleleType::Ambiguous;
                         } else {
                             // there is no alignment overlap
                             trace!("\tNo overlap");
                             overlaps_allele = false;
-                            allele = 3;
+                            allele = AlleleType::NoOverlap;
                         }
                         qual = MISSING_QUAL;
                         exact_allele = false;
@@ -401,7 +401,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                             let deleted_ratio: f64 = deleted_count as f64 / expected_deleted as f64;
                             if deleted_ratio < match_window_size {
                                 // mostly not deleted
-                                allele = 0;
+                                allele = AlleleType::Reference;
                                 
                                 // quality should be better the closer the deleted_ratio is to 0.0
                                 qual = (SV_INDEL_QUAL as f64 * (1.0-deleted_ratio)).max(1.0) as u8;
@@ -413,7 +413,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                                 }
                             } else if (1.0 - deleted_ratio).abs() < match_window_size  {
                                 // mostly deleted and not over-deleted
-                                allele = 1;
+                                allele = AlleleType::Alternate;
 
                                 // quality should be better the closer the deleted_ratio is to 1.0
                                 let qual_frac = 1.0 - (1.0 - deleted_ratio).abs();
@@ -429,7 +429,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                                 last_deletion_end = first_end_coordinate;
                             } else {
                                 // ambiguous either because it's in between or over-deleted
-                                allele = 2;
+                                allele = AlleleType::Ambiguous;
                                 qual = MISSING_QUAL;
                                 exact_allele = false;
                             }
@@ -437,14 +437,14 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                         } else {
                             // we have a partial overlap, but don't reach the far end
                             // mirror what we do above by marking overlap as true but otherwise a failure to match
-                            allele = 2;
+                            allele = AlleleType::Ambiguous;
                             qual = MISSING_QUAL;
                             exact_allele = false;
                             overlaps_allele = true;
                         }
                     } else {
                         // we don't overlap the start
-                        allele = 3;
+                        allele = AlleleType::NoOverlap;
                         qual = MISSING_QUAL;
                         exact_allele = false;
                         overlaps_allele = false;
@@ -458,8 +458,8 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
 
         // gather stats on the match
         if overlaps_allele {
-            assert!(allele <= 2);
-            if allele == 2 {
+            assert!(allele <= AlleleType::Ambiguous);
+            if allele == AlleleType::Ambiguous {
                 failed_matches[vt_index] += 1;
             } else {
                 if exact_allele {
@@ -467,7 +467,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                 } else {
                     inexact_matches[vt_index] += 1;
                 }
-                if allele == 0 {
+                if allele == AlleleType::Reference {
                     allele0_matches[vt_index] += 1;
                 } else {
                     allele1_matches[vt_index] += 1;
@@ -476,7 +476,7 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<u8>,
                 num_alleles += 1;
             }
         } else {
-            assert_eq!(allele, 3);
+            assert_eq!(allele, AlleleType::NoOverlap);
         }
 
         // no matter what, we push these now
@@ -615,14 +615,14 @@ pub fn load_full_read_segments(
         let collapsed_read: ReadSegment = ReadSegment::collapse(read_group);
         let num_set: usize = collapsed_read.get_num_set();
         if num_set >= min_matched_alleles {
-            let segment_range = collapsed_read.get_range();
+            let segment_range = collapsed_read.region().clone();
             read_segments.insert(segment_range, collapsed_read);
             joint_stats.increase_num_reads(read_group.len() as u64);
         } else {
             joint_stats.increase_skipped_reads(read_group.len() as u64);
             if num_set > 0 {
                 // even though this won't be used for phasing, it CAN be phased
-                let segment_range = collapsed_read.get_range();
+                let segment_range = collapsed_read.region().clone();
                 phasable_segments.insert(segment_range, collapsed_read);
             }
         }
@@ -654,7 +654,7 @@ fn global_realignment(
     variant_calls: &[Variant], hom_calls: &[Variant],
     reference_genome: &ReferenceGenome,
     wfa_prune_distance: usize, global_max_edit_distance: usize
-) -> Result<(Vec<u8>, Vec<u8>, ReadStats, usize), Box<dyn std::error::Error>> {
+) -> Result<(Vec<AlleleType>, Vec<u8>, ReadStats, usize), Box<dyn std::error::Error>> {
     use rust_htslib::bam::ext::BamRecordExtensions;
     
     let num_variants: usize = variant_calls.len();
@@ -787,26 +787,26 @@ fn global_realignment(
     // edit_distances.push(wfa_result.score());
 
     //we will populate these with the variant level info
-    let mut alleles: Vec<u8> = vec![3; num_variants];
+    let mut alleles: Vec<AlleleType> = vec![AlleleType::NoOverlap; num_variants];
     for traversed_index in wfa_result.traversed_nodes().iter() {
         for &(var_index, allele_assignment) in node_to_alleles.get(traversed_index).unwrap_or(&vec![]).iter() {
             let correct_index: usize = first_overlap+var_index;
-            if alleles[correct_index] == 3 {
-                alleles[correct_index] = allele_assignment;
-            } else if alleles[correct_index] != allele_assignment {
-                alleles[correct_index] = 2;
+            if alleles[correct_index] == AlleleType::NoOverlap {
+                alleles[correct_index] = AlleleType::from_repr(allele_assignment).unwrap_or(AlleleType::NoOverlap);
+            } else if alleles[correct_index] != AlleleType::from_repr(allele_assignment).unwrap_or(AlleleType::NoOverlap) {
+                alleles[correct_index] = AlleleType::Ambiguous;
             }
         }
     }
     
     // go through the result counting assigned and setting qualities
     let mut quals: Vec<u8> = vec![0; num_variants];
-    for (i, a) in alleles.iter_mut().enumerate() {
+    for (i, a) in alleles.iter().enumerate() {
         let variant_type: VariantType = variant_calls[i].get_type();
         let vt_index: usize = variant_type as usize;
-        if *a == 3 {
+        if *a == AlleleType::NoOverlap {
             // no overlaps for this allele
-        } else if *a == 2 {
+        } else if *a == AlleleType::Ambiguous {
             // overlaps, but ambiguous matching
             failed_matches[vt_index] += 1;
         } else {
@@ -841,7 +841,7 @@ fn global_realignment(
             } else {
                 inexact_matches[vt_index] += 1;
             }
-            if *a == 0 {
+            if *a == AlleleType::Reference {
                 allele0_matches[vt_index] += 1;
             } else {
                 allele1_matches[vt_index] += 1;

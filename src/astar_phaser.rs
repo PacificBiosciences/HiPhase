@@ -1,6 +1,6 @@
 
 use crate::{block_gen::PhaseBlock, data_types::variants::VariantType};
-use crate::data_types::read_segments::ReadSegment;
+use crate::data_types::read_segments::{AlleleType, ReadSegment};
 use crate::data_types::variants::Variant;
 use crate::writers::phase_stats::PhaseStats;
 
@@ -10,7 +10,7 @@ use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
 
 /// A node in the A* search tree.
-#[derive(Eq,Hash,PartialEq)]
+#[derive(Eq, Hash, PartialEq)]
 struct AstarNode {
     /// The node index
     node_index: u64,
@@ -21,9 +21,9 @@ struct AstarNode {
     /// An estimate of the remaining cost to extend this node to full.
     heuristic_cost: u64,
     /// The first haplotype in this node's solution.
-    h1: Vec<u8>,
+    h1: Vec<AlleleType>,
     /// The second haplotype in this node's solution.  It can be identically to h1, but usually is not.
-    h2: Vec<u8>,
+    h2: Vec<AlleleType>,
     /// The number of heterozygous results in this node's solution.  I.e. sum(h1[x] != h2[x])
     num_hets: u64
 }
@@ -69,16 +69,16 @@ impl AstarNode {
     pub fn new_extended_node(
         node_index: u64,
         parent_node: &AstarNode,
-        allele1: u8, 
-        allele2: u8,
+        allele1: AlleleType,
+        allele2: AlleleType,
         heuristic_cost: u64, 
         read_segments: &IntervalTree<usize, ReadSegment>,
         hap_offset: usize
     ) -> AstarNode {
         // make sure we didn't goof
-        let mut h1: Vec<u8> = parent_node.get_h1().to_vec();
+        let mut h1: Vec<AlleleType> = parent_node.get_h1().to_vec();
         h1.push(allele1);
-        let mut h2: Vec<u8> = parent_node.get_h2().to_vec();
+        let mut h2: Vec<AlleleType> = parent_node.get_h2().to_vec();
         h2.push(allele2);
         assert_eq!(h1.len(), h2.len());
         
@@ -98,7 +98,7 @@ impl AstarNode {
             );
 
             // determine where that cost gets assigned
-            if rs.last_allele() < hap_len {
+            if rs.region().end <= hap_len {
                 // this one is frozen because the last allele was just added
                 frozen_cost += rs_cost;
             } else {
@@ -137,11 +137,11 @@ impl AstarNode {
         (Reverse(0), self.num_hets, Reverse(self.node_index))
     }
 
-    pub fn get_h1(&self) -> &[u8] {
+    pub fn get_h1(&self) -> &[AlleleType] {
         &self.h1[..]
     }
 
-    pub fn get_h2(&self) -> &[u8] {
+    pub fn get_h2(&self) -> &[AlleleType] {
         &self.h2[..]
     }
 
@@ -349,7 +349,7 @@ fn astar_subsolver(
             // the next variant we want to add to the haplotype is a bad variant, so skip it
             let new_node = AstarNode::new_extended_node(
                 next_node_index,
-                &top_node, 2, 2, 
+                &top_node, AlleleType::Ambiguous, AlleleType::Ambiguous,
                 heuristic_costs[problem_offset+allele_count+1], 
                 read_segments,
                 problem_offset
@@ -364,11 +364,16 @@ fn astar_subsolver(
             pqueue.push(new_node, new_priority);
         } else {
             // we didn't exit, so we need to add all expansions of this allele
-            let hap_order = [(0, 1), (1, 0), (0, 0), (1, 1)];
+            let hap_order = [
+                (AlleleType::Reference, AlleleType::Alternate), // 0|1
+                (AlleleType::Alternate, AlleleType::Reference), // 1|0
+                (AlleleType::Reference, AlleleType::Reference), // 0/0
+                (AlleleType::Alternate, AlleleType::Alternate) //  1/1
+            ];
             for &(h1, h2) in hap_order.iter() {
                 // we don't want to add both 0-1 and 1-0 if the haplotypes before are identical; it doubles our work
                 // so skip 1-0 if the haplotypes in the node are identical
-                if !(h1 == 1 && h2 == 0 && top_node.is_identical_haplotypes()) {
+                if !(h1 == AlleleType::Alternate && h2 == AlleleType::Reference && top_node.is_identical_haplotypes()) {
                     // generate a new node and add to the queue
                     let new_node = AstarNode::new_extended_node(
                         next_node_index,
@@ -402,9 +407,9 @@ fn astar_subsolver(
 /// A result for a phasing algorithm, assumes diploid solution currently.
 pub struct AstarResult {
     /// The first haplotype in the solution.
-    pub haplotype_1: Vec<u8>,
+    pub haplotype_1: Vec<AlleleType>,
     /// The second haplotype in the solution.
-    pub haplotype_2: Vec<u8>,
+    pub haplotype_2: Vec<AlleleType>,
     /// Optional statistics from the problem
     pub statistics: PhaseStats
 }
@@ -429,10 +434,9 @@ pub fn astar_solver(
     // there is technically a cost here, but it is negligible for our sanity while debugging
     for rse in read_segments.find(0..usize::MAX) {
         let segment = rse.data();
-        let alleles = segment.alleles();
         for (var_index, v) in variants.iter().enumerate() {
             if v.is_ignored() {
-                assert!(alleles[var_index] == 3);
+                assert!(segment.allele(var_index) == AlleleType::NoOverlap);
             }
         }
     }
@@ -449,7 +453,9 @@ pub fn astar_solver(
     
     // set max queue size to either 2 * the highest functional queue size OR a large constant, whichever is greater
     // the large constant help prevent over-use of the full pruning algorithm if the base queue values are small
-    let max_queue_size: usize = (2 * (min_queue_size + queue_increment * num_variants)).max(10000);
+    // let max_queue_size: usize = (2 * (min_queue_size + queue_increment * num_variants)).max(10000);
+    let max_queue_size: usize = 10 * min_queue_size; // old method was dynamic, but in practice I don't think actually mattered, lets fix it to something semi-large
+
     let mut min_progress: usize = 0;
     let mut pqueue: PriorityQueue<AstarNode, (Reverse<u64>, u64, Reverse<u64>)> = PriorityQueue::new();
     let mut hap_tracker: PQueueHapTracker = PQueueHapTracker::new(num_variants);
@@ -512,7 +518,7 @@ pub fn astar_solver(
             // we are skipping this variant, generate a new node with unassigned values and add it back to the queue
             let new_node = AstarNode::new_extended_node(
                 next_node_index,
-                &top_node, 2, 2,
+                &top_node, AlleleType::Ambiguous, AlleleType::Ambiguous,
                 heuristic_costs[allele_count+1], 
                 read_segments,
                 0
@@ -526,11 +532,16 @@ pub fn astar_solver(
         } else {
             // we didn't exit, so we need to add all expansions of this allele
             // these are ordered such that heterozygous options come first
-            let hap_order = [(0, 1), (1, 0), (0, 0), (1, 1)];
+            let hap_order = [
+                (AlleleType::Reference, AlleleType::Alternate), // 0|1
+                (AlleleType::Alternate, AlleleType::Reference), // 1|0
+                (AlleleType::Reference, AlleleType::Reference), // 0/0
+                (AlleleType::Alternate, AlleleType::Alternate) //  1/1
+            ];
             for &(h1, h2) in hap_order.iter() {
                 // we don't want to add both 0-1 and 1-0 if the haplotypes before are identical; it doubles our work
                 // so skip 1-0 if the haplotypes in the node are identical
-                if !(h1 == 1 && h2 == 0 && top_node.is_identical_haplotypes()) {
+                if !(h1 == AlleleType::Alternate && h2 == AlleleType::Reference && top_node.is_identical_haplotypes()) {
                     // generate a new node and add to the queue
                     let new_node = AstarNode::new_extended_node(
                         next_node_index,
@@ -550,7 +561,7 @@ pub fn astar_solver(
         }
 
         // check if we need to increase our minimum progression to prune off some nodes in the queue
-        if hap_tracker.len() > curr_queue_size_threshold && min_progress < next_expected {
+        while hap_tracker.len() > curr_queue_size_threshold && min_progress < next_expected {
             min_progress += 1;
             debug!("B#{} min_progress={}", phase_block.get_block_index(), min_progress);
             hap_tracker.increase_threshold(min_progress);
@@ -595,7 +606,7 @@ pub fn astar_solver(
                 if variants[i].get_type() == VariantType::Snv {
                     phased_snvs += 1;
                 }
-            } else if h1 == 2 {
+            } else if h1 == AlleleType::Ambiguous {
                 // they are both equal to 2
                 skipped_variants += 1;
             } else {
@@ -631,19 +642,19 @@ mod tests {
     fn get_simple_reads(num_alleles: usize) -> IntervalTree<usize, ReadSegment> {
         let rs1 = ReadSegment::new(
             "read_name".to_string(),
-            vec![0; num_alleles],
+            vec![AlleleType::Reference; num_alleles],
             vec![2; num_alleles]
         );
         let rs2 = ReadSegment::new(
             "read_name_2".to_string(),
-            vec![1; num_alleles],
+            vec![AlleleType::Alternate; num_alleles],
             vec![3; num_alleles]
         );
         let seg_vec = vec![rs1, rs2];
 
         let mut read_segments: IntervalTree<usize, ReadSegment> = IntervalTree::new();
         for rs in seg_vec.into_iter() {
-            read_segments.insert(rs.get_range(), rs);
+            read_segments.insert(rs.region().clone(), rs);
         }
         read_segments
     }
@@ -665,7 +676,7 @@ mod tests {
             let num_hets: u64 = 0;
             let next_node = AstarNode::new_extended_node(
                 node_index,
-                &current_node, 0, 0,
+                &current_node, AlleleType::Reference, AlleleType::Reference,
                 heuristic_costs[i+1],
                 &read_segments,
                 hap_offset
@@ -683,8 +694,8 @@ mod tests {
             assert_eq!(next_node.get_total_cost(), expected_cost);
             assert_eq!(next_node.get_priority(), (Reverse(expected_cost), num_hets, Reverse(node_index)));
             assert_eq!(next_node.get_cleared_priority(), (Reverse(0), num_hets, Reverse(node_index)));
-            assert_eq!(next_node.get_h1().to_vec(), vec![0; i+1]);
-            assert_eq!(next_node.get_h2().to_vec(), vec![0; i+1]);
+            assert_eq!(next_node.get_h1().to_vec(), vec![AlleleType::Reference; i+1]);
+            assert_eq!(next_node.get_h2().to_vec(), vec![AlleleType::Reference; i+1]);
             assert_eq!(next_node.get_allele_count(), i+1);
             assert_eq!(next_node.get_num_hets(), num_hets);
             assert!(next_node.is_identical_haplotypes());
@@ -698,7 +709,7 @@ mod tests {
             let num_hets: u64 = node_index;
             let next_node = AstarNode::new_extended_node(
                 node_index,
-                &current_node, 0, 1,
+                &current_node, AlleleType::Reference, AlleleType::Alternate,
                 heuristic_costs[i+1],
                 &read_segments,
                 hap_offset
@@ -712,8 +723,8 @@ mod tests {
             assert_eq!(next_node.get_total_cost(), expected_cost);
             assert_eq!(next_node.get_priority(), (Reverse(expected_cost), num_hets, Reverse(node_index)));
             assert_eq!(next_node.get_cleared_priority(), (Reverse(0), num_hets, Reverse(node_index)));
-            assert_eq!(next_node.get_h1().to_vec(), vec![0; i+1]);
-            assert_eq!(next_node.get_h2().to_vec(), vec![1; i+1]);
+            assert_eq!(next_node.get_h1().to_vec(), vec![AlleleType::Reference; i+1]);
+            assert_eq!(next_node.get_h2().to_vec(), vec![AlleleType::Alternate; i+1]);
             assert_eq!(next_node.get_allele_count(), i+1);
             assert_eq!(next_node.get_num_hets(), num_hets);
             assert!(!next_node.is_identical_haplotypes());
@@ -727,7 +738,7 @@ mod tests {
             let num_hets: u64 = 0;
             let next_node = AstarNode::new_extended_node(
                 node_index,
-                &current_node, 1, 1,
+                &current_node, AlleleType::Alternate, AlleleType::Alternate,
                 heuristic_costs[i+1],
                 &read_segments,
                 hap_offset
@@ -745,8 +756,8 @@ mod tests {
             assert_eq!(next_node.get_total_cost(), expected_cost);
             assert_eq!(next_node.get_priority(), (Reverse(expected_cost), num_hets, Reverse(node_index)));
             assert_eq!(next_node.get_cleared_priority(), (Reverse(0), num_hets, Reverse(node_index)));
-            assert_eq!(next_node.get_h1().to_vec(), vec![1; i+1]);
-            assert_eq!(next_node.get_h2().to_vec(), vec![1; i+1]);
+            assert_eq!(next_node.get_h1().to_vec(), vec![AlleleType::Alternate; i+1]);
+            assert_eq!(next_node.get_h2().to_vec(), vec![AlleleType::Alternate; i+1]);
             assert_eq!(next_node.get_allele_count(), i+1);
             assert_eq!(next_node.get_num_hets(), num_hets);
             assert!(next_node.is_identical_haplotypes());
