@@ -7,7 +7,10 @@ use log::{error, info, trace, warn};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use strum_macros::{Display, EnumString};
 
+use crate::astar_phaser::AstarConfig;
+use crate::phaser::PhasingConfig;
 use crate::read_parsing::GlobalRealignmentConfig;
 
 lazy_static! {
@@ -16,6 +19,13 @@ lazy_static! {
     /// * `0.11.0-6bb9635-dirty` - while on a dirty branch
     /// * `0.11.0-6bb9635` - with a fresh commit
     pub static ref FULL_VERSION: String = format!("{}-{}", env!("CARGO_PKG_VERSION"), env!("VERGEN_GIT_DESCRIBE"));
+}
+
+#[derive(Clone, Copy, Debug, Display, EnumString, clap::ValueEnum)]
+#[strum(serialize_all = "lowercase")]
+pub enum CliPreset {
+    /// Configure the setting for RNA-seq data
+    Rna
 }
 
 #[derive(Clone, Parser)]
@@ -112,6 +122,12 @@ pub struct Settings {
     #[clap(help_heading = Some("Input/Output"))]
     pub csi_index: bool,
 
+    /// Use a preset for the settings
+    #[clap(long = "preset")]
+    #[clap(ignore_case = true)]
+    #[clap(value_name = "PRESET")]
+    pub preset: Option<CliPreset>,
+
     /// Number of threads to use for phasing
     #[clap(short = 't')]
     #[clap(long = "threads")]
@@ -146,7 +162,7 @@ pub struct Settings {
     #[clap(help_heading = Some("Mapping Filtering"))]
     pub min_matched_alleles: usize,
 
-    /// Sets a minimum number of reads to span two adjacent variants to join a phase block
+    /// Sets a minimum number of reads to span two adjacent variants into a putative phase block
     #[clap(long = "min-spanning-reads")]
     #[clap(value_name = "READS")]
     #[clap(default_value = "1")]
@@ -162,6 +178,19 @@ pub struct Settings {
     #[clap(long = "phase-singletons")]
     #[clap(help_heading = Some("Phase Block Generation"))]
     pub phase_singletons: bool,
+
+    /// Reverts back to the linear block algorithm
+    #[clap(long = "use-linear-block-algorithm")]
+    #[clap(help_heading = Some("Phase Block Generation"))]
+    #[clap(hide = true)] // this is an old method, and seemingly slight worse; we are hiding the option and will ideally remove this component in the future
+    pub use_linear_block_algorithm: bool,
+
+    /// Sets the minimum number of connecting reads required to keep two variants in the same block
+    #[clap(long = "min-connecting-reads")]
+    #[clap(value_name = "READS")]
+    #[clap(default_value = "1")]
+    #[clap(help_heading = Some("Phase Block Generation"))]
+    pub min_connecting_reads: u64,
 
     /// Sets a maximum reference buffer for local realignment
     #[clap(long = "max-reference-buffer")]
@@ -210,6 +239,11 @@ pub struct Settings {
     #[clap(default_value = "50")]
     #[clap(help_heading = Some("Allele Assignment"))]
     pub global_failure_minimum: usize,
+
+    /// Optimize the variant order prior to phasing
+    #[clap(long = "optimize-variant-order")]
+    #[clap(help_heading = Some("Phasing"))]
+    pub optimize_variant_order: bool,
 
     /// Sets the minimum queue size for the phasing algorithm
     #[clap(long = "phase-min-queue-size")]
@@ -298,6 +332,20 @@ fn check_required_vcf(filename: &Path, label: &str) {
 }
 
 impl Settings {
+    /// Wrapper function to build a phasing configuration from our CLI settings
+    pub fn phasing_config(&self) -> PhasingConfig {
+        PhasingConfig {
+            reference_buffer: self.reference_buffer,
+            min_matched_alleles: self.min_matched_alleles,
+            min_mapq: self.min_mapping_quality,
+            global_realignment_config: self.global_realignment_config(),
+            optimize_variant_order: self.optimize_variant_order,
+            astar_config: self.astar_config(),
+            use_linear_block_algorithm: self.use_linear_block_algorithm,
+            min_connecting_reads: self.min_connecting_reads
+        }
+    }
+
     /// Wrapper function to build a global realignment configuration from our CLI settings
     pub fn global_realignment_config(&self) -> Option<GlobalRealignmentConfig> {
         if self.disable_global_realignment {
@@ -311,6 +359,14 @@ impl Settings {
             })
         }
     }
+
+    /// Wrapper function to build an A* configuration from our CLI settings
+    pub fn astar_config(&self) -> AstarConfig {
+        AstarConfig {
+            min_queue_size: self.phase_min_queue_size,
+            queue_increment: self.phase_queue_increment
+        }
+    }
 }
 
 pub fn get_raw_settings() -> Settings {
@@ -322,6 +378,19 @@ pub fn get_raw_settings() -> Settings {
 /// # Arguments
 /// * `settings` - the raw settings, nothing has been checked other than what clap does for us.
 pub fn check_settings(mut settings: Settings) -> Settings {
+    // if a preset is specified, set the settings accordingly
+    if let Some(preset) = settings.preset {
+        info!("Using preset: {}, overriding settings with:", preset);
+        match preset {
+            CliPreset::Rna => {
+                settings.disable_global_realignment = true;
+                settings.optimize_variant_order = true;
+                settings.min_connecting_reads = 7;
+                info!("\t\"--disable-global-realignment --optimize-variant-order --min-connecting-reads 7\"");
+            }
+        }
+    }
+
     //check for any of our required files
     for filename in settings.bam_filenames.iter() {
         check_required_filename(filename, "Alignment file");
@@ -373,14 +442,20 @@ pub fn check_settings(mut settings: Settings) -> Settings {
     info!("\tMinimum call quality: {}", settings.min_variant_quality);
     info!("\tMinimum mapping quality: {}", settings.min_mapping_quality);
     info!("\tMinimum matched alleles: {}", settings.min_matched_alleles);
-    if settings.min_matched_alleles > 2 {
-        warn!("\tSetting the minimum matched alleles > 2 has not been tested.")
-    }
 
     info!("Phase block generation:");
     info!("\tMinimum spanning reads: {}", settings.min_spanning_reads);
+    if settings.min_spanning_reads > 1 {
+        warn!("\tSetting the minimum spanning reads > 1 has not been tested. This option may be removed in a future release.");
+    }
     info!("\tSupplemental mapping block joins: {}", if settings.disable_supplemental_joins { "DISABLED" } else { "ENABLED" });
     info!("\tPhase singleton blocks: {}", if settings.phase_singletons { "ENABLED" } else { "DISABLED" });
+    if settings.use_linear_block_algorithm {
+        info!("\tBlock algorithm: Reverted to linear");
+    } else {
+        // this is only used for the non-linear block algorithm
+        info!("\tMinimum connecting reads: {}", settings.min_connecting_reads);
+    }
 
     info!("Allele assignment:");
     info!("\tLocal re-alignment maximum reference buffer: +-{} bp", settings.reference_buffer);
@@ -403,6 +478,11 @@ pub fn check_settings(mut settings: Settings) -> Settings {
             std::process::exit(exitcode::USAGE);
         }
     }
+
+    info!("Phasing:");
+    info!("\tOptimize variant order: {}", if settings.optimize_variant_order { "ENABLED" } else { "DISABLED" });
+    info!("\tMinimum queue size: {}", settings.phase_min_queue_size);
+    info!("\tQueue increment: {}", settings.phase_queue_increment);
 
     // warn that this is deprecated, but otherwise ignore it
     if settings.global_realign_cputime != 0.0 {

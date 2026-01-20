@@ -109,7 +109,6 @@ pub fn load_read_segments(
     }
     
     debug!("Read segment stats: {:?}", joint_stats);
-    
     Ok((read_segments, phasable_segments, joint_stats))
 }
 
@@ -287,44 +286,33 @@ fn local_realignment(read: &bam::Record, variant_calls: &[Variant]) -> (Vec<Alle
                                 exact_allele = true;
                             }
 
-                            // this approach uses harmonic mean of base quality as a scaling factor on the baseline quality
-                            // * no ED penalty
-                            // * max of 40.0 for full credit
-                            let max_qual_credit = 40.0;
-                            let harmonic_qual = (se - ss) as f64 /
-                                read_qualities[ss..se].iter()
-                                    .map(|&q| 1.0f64 / q as f64)
-                                    .sum::<f64>();
-
-                            // figure out the quality score out of the maximum
-                            let qual_factor = (harmonic_qual / max_qual_credit).min(1.0);
-
                             // we consolidated our quality values into a single system, so these below is copied from global
-                            let baseline_quality = match variant_type {
-                                // these weights are up-weights for global re-alignments
-                                // SNVs tend to always be the cleanest
-                                VariantType::Snv => SNV_QUAL,
+                            if allele == AlleleType::Reference || allele == AlleleType::Alternate {
+                                qual = match variant_type {
+                                    // these weights are up-weights for global re-alignments
+                                    // SNVs tend to always be the cleanest
+                                    VariantType::Snv => SNV_QUAL,
 
-                                // these are probably the noisiest of the bunch
-                                VariantType::Deletion |
-                                VariantType::Insertion |
-                                VariantType::Indel => INDEL_QUAL,
-                                
-                                // these should be pretty high confidence because they have a lot of bases to make them work
-                                VariantType::SvDeletion |
-                                VariantType::SvInsertion => SV_INDEL_QUAL,
-                                
-                                // we want tandem repeats to have higher confidence than random indels
-                                VariantType::TandemRepeat => TR_QUAL,
+                                    // these are probably the noisiest of the bunch
+                                    VariantType::Deletion |
+                                    VariantType::Insertion |
+                                    VariantType::Indel => INDEL_QUAL,
 
-                                _ => {
-                                    panic!("No implementation for matching {variant_type:?}");
-                                }
+                                    // these should be pretty high confidence because they have a lot of bases to make them work
+                                    VariantType::SvDeletion |
+                                    VariantType::SvInsertion => SV_INDEL_QUAL,
+
+                                    // we want tandem repeats to have higher confidence than random indels
+                                    VariantType::TandemRepeat => TR_QUAL,
+
+                                    _ => {
+                                        panic!("No implementation for matching {variant_type:?}");
+                                    }
+                                };
+                            } else {
+                                // allele is unassigned, so we don't have a quality score
+                                qual = MISSING_QUAL;
                             };
-
-                            // final quality is the baseline * factor (strictly reduces)
-                            // then set to 1 in worst case
-                            qual = (baseline_quality as f64 * qual_factor).max(1.0) as u8;
                             
                             overlaps_allele = true;
                             trace!("\tallele = {:?}, qual = {}, ED = {}", allele, qual, edit_distance);
@@ -656,6 +644,53 @@ fn global_realignment(
     wfa_prune_distance: usize, global_max_edit_distance: usize
 ) -> Result<(Vec<AlleleType>, Vec<u8>, ReadStats, usize), Box<dyn std::error::Error>> {
     use rust_htslib::bam::ext::BamRecordExtensions;
+    use rust_htslib::bam::record::Cigar;
+
+    // track the reference position while we find the regions to align against
+    let mut ref_pos = read.pos();
+
+    // track the reference regions that are covered by the read
+    let mut regions = vec![];
+    let mut start_pos = None; // this is an option so we can detect if we have a region or not
+    let mut end_pos = 0;
+
+    for cigar_op in read.cigar().iter() {
+        match cigar_op {
+            // these are all flavors of matches
+            Cigar::Match(length) | Cigar::Equal(length) | Cigar::Diff(length) => {
+                if start_pos.is_none() {
+                    start_pos = Some(ref_pos);
+                }
+
+                // both advance with a match
+                ref_pos += *length as i64;
+                end_pos = ref_pos;
+            },
+            Cigar::Del(length) => {
+                // deletions advance the reference
+                ref_pos += *length as i64;
+            },
+            Cigar::RefSkip(length) => {
+                if let Some(start) = start_pos {
+                    // we have a new region to add
+                    regions.push(start..end_pos);
+                    start_pos = None;
+                }
+
+                // skipped advances the reference
+                ref_pos += *length as i64;
+            },
+            Cigar::Ins(_length) | Cigar::SoftClip(_length) |
+            Cigar::HardClip(_length) | Cigar::Pad(_length) => {
+                // all of these do not advance the reference position, which is all we're tracking
+            }
+        };
+    }
+
+    // add the final region, which we usually have one of
+    if let Some(start) = start_pos {
+        regions.push(start..end_pos);
+    }
     
     let num_variants: usize = variant_calls.len();
 
@@ -670,37 +705,153 @@ fn global_realignment(
 
     //build a lookup from reference coordinate -> sequence coordinate
     let mut coordinate_lookup: HashMap<i64, i64> = Default::default();
-    let mut min_position: i64 = i64::MAX;
-    let mut max_position: i64 = i64::MIN;
+    let mut full_min_position: i64 = i64::MAX;
+    let mut full_max_position: i64 = i64::MIN;
     for bp in read.aligned_pairs() {
         let segment_index = bp[0];
         let ref_index = bp[1];
         coordinate_lookup.insert(ref_index, segment_index);
-        min_position = min_position.min(ref_index);
-        max_position = max_position.max(ref_index);
+        full_min_position = full_min_position.min(ref_index);
+        full_max_position = full_max_position.max(ref_index);
     }
-    assert!(max_position >= min_position);
+    assert!(full_max_position >= full_min_position);
 
     // max_position is the last one that we found, so add +1 to include in the range
-    let aligned_range = min_position..(max_position+1);
+    if regions.len() == 1 {
+        // if we have a single range, then it should be the full range of the read
+        assert_eq!(regions[0].start, full_min_position);
+        assert_eq!(regions[0].end, full_max_position + 1);
+    }
 
-    //we will populate these with the variant level info
-    let mut num_overlaps: usize = 0;
-    let mut first_overlap: Option<usize> = None;
-    let mut last_overlap: usize = 0;
-    for (i, variant) in variant_calls.iter().enumerate() {
-        let variant_pos: i64 = variant.position();
-        if aligned_range.contains(&variant_pos) {
-            if first_overlap.is_none() {
-                first_overlap = Some(i);
+    // initialize the full set of alleles to NoOverlap
+    let mut alleles: Vec<AlleleType> = vec![AlleleType::NoOverlap; num_variants];
+    let mut total_overlaps: usize = 0;
+    let mut wfa_total_score = 0;
+
+    for aligned_range in regions.iter() {
+        // min and max positions are inclusive
+        let min_position: i64 = aligned_range.start;
+        let max_position: i64 = aligned_range.end - 1;
+
+        //we will populate these with the variant level info
+        let mut num_overlaps: usize = 0;
+        let mut first_overlap: Option<usize> = None;
+        let mut last_overlap: usize = 0;
+        for (i, variant) in variant_calls.iter().enumerate() {
+            let variant_pos: i64 = variant.position();
+            if aligned_range.contains(&variant_pos) {
+                if first_overlap.is_none() {
+                    first_overlap = Some(i);
+                }
+                last_overlap = i+1;
+                num_overlaps += 1;
             }
-            last_overlap = i+1;
-            num_overlaps += 1;
         }
+
+        // if this segment mapping overlaps no alleles, then there's no reason to look at it anymore
+        if num_overlaps == 0 {
+            // skip the rest of the segment analysis
+            continue;
+        }
+
+        // convert into a non-option
+        let first_overlap: usize = first_overlap.unwrap();
+        assert_eq!(num_overlaps, last_overlap - first_overlap);
+
+        // check for homozygous variants also
+        let mut first_hom_overlap: Option<usize> = None;
+        let mut last_hom_overlap: usize = 0;
+        for (i, variant) in hom_calls.iter().enumerate() {
+            let variant_pos: i64 = variant.position();
+            if aligned_range.contains(&variant_pos) {
+                if first_hom_overlap.is_none() {
+                    first_hom_overlap = Some(i);
+                }
+                last_hom_overlap = i+1;
+            }
+        }
+        let first_hom_overlap: usize = first_hom_overlap.unwrap_or(0);
+
+        // .seq() returns Seq<'_> type, but we should just full decode
+        let read_sequence: Vec<u8> = read.seq().as_bytes();
+        let read_qualities: &[u8] = read.qual();
+        assert_eq!(read_sequence.len(), read_qualities.len());
+        
+        // these should always exist based on how we set it up
+        let read_start: usize = *coordinate_lookup.get(&min_position).unwrap() as usize;
+        let read_end: usize = *coordinate_lookup.get(&max_position).unwrap() as usize;
+
+        // pull out the part of the read we're aligning against
+        let read_align: &[u8] = &read_sequence[read_start..(read_end+1)];
+
+        /*
+        Current state:
+        - we have the reference genome
+        - we have the part of the read that aligns in `read_align`, the full read sequence in `read_sequence`
+        - we have the indices of the first and last variant overlaps in `first_overlap` and `last_overlap`
+        
+        We need to populate:
+        - alleles
+        - quals
+        - read stats (see below)
+
+        Game plan:
+        - construct a graph representing just this reference location + relevant alleles
+        - while constructing, assign alleles to each new branch (it may be reference allele)
+        -- IF you have multiple alleles starting at the same coordinate (e.g. identical call), then do not create an in-between node; this should resolve in the tie-breaking as "identical"
+        -- so each branch should get a variant index + an allele assignment (0/1); reference alleles may end up with multiple 0 alleles in the event of multi-start
+        - align the read via POA
+        - look at the traversed nodes and copy the allele assignments; if anything is unassigned at the end, it gets 2; any with conflicting assignments get 2 also
+        - update stats according to the assignments, we can't really do exact right now (maybe we can look at score deltas from one node to the next?)
+        */
+        let chromosome = phase_problem.get_chrom();
+        let chrom_seq: &[u8] = reference_genome.get_full_chromosome(chromosome);
+        
+        // we need to also provide any preset alleles
+        let start_time = std::time::Instant::now();
+        let (wfa_graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
+            WFAGraph::from_reference_variants_with_hom(
+                chrom_seq, 
+                &variant_calls[first_overlap..last_overlap], // these are both range style indices
+                &hom_calls[first_hom_overlap..last_hom_overlap],
+                min_position as usize, 
+                max_position as usize + 1,
+                global_max_edit_distance
+            ).unwrap();
+        
+        // pass through for the WFA errors now
+        let wfa_result: WFAResult = wfa_graph.edit_distance_with_pruning(read_align, wfa_prune_distance)?;
+
+        debug!(
+            "B#{} WFAGraph result ({}) => num_nodes: {}, read_len: {}, variant_overlaps: {}, edit_distance: {}", 
+            phase_problem.get_block_index(), start_time.elapsed().as_secs_f32(), wfa_graph.get_num_nodes(), max_position-min_position+1, num_overlaps, wfa_result.score()
+        );
+        
+        // edit_distances.push(wfa_result.score());
+
+        // we will populate these with the variant level info
+        for traversed_index in wfa_result.traversed_nodes().iter() {
+            for &(var_index, allele_assignment) in node_to_alleles.get(traversed_index).unwrap_or(&vec![]).iter() {
+                let correct_index: usize = first_overlap+var_index;
+                let allele_rep = AlleleType::from_repr(allele_assignment).unwrap_or(AlleleType::NoOverlap);
+                if alleles[correct_index] == AlleleType::NoOverlap {
+                    // this has not been set yet, so we can just set it
+                    alleles[correct_index] = allele_rep;
+                } else if alleles[correct_index] != allele_rep {
+                    // they don't match, so we set it to ambiguous
+                    // this does not generally happen, but it's safe to handle it
+                    alleles[correct_index] = AlleleType::Ambiguous;
+                }
+            }
+        }
+
+        // add the total score for this segment to the running total
+        total_overlaps += num_overlaps;
+        wfa_total_score += wfa_result.score();
     }
 
     // if this mapping overlaps no alleles, then there's no reason to look at it anymore
-    if num_overlaps == 0 {
+    if total_overlaps == 0 {
         // short circuit return
         let skip_stats = ReadStats::new(
             num_reads, 1, num_alleles, 
@@ -709,94 +860,6 @@ fn global_realignment(
             0, 0
         );
         return Ok((vec![], vec![], skip_stats, usize::MAX));
-    }
-
-    // convert into a non-option
-    let first_overlap: usize = first_overlap.unwrap();
-    assert_eq!(num_overlaps, last_overlap - first_overlap);
-
-    // check for homozygous variants also
-    let mut first_hom_overlap: Option<usize> = None;
-    let mut last_hom_overlap: usize = 0;
-    for (i, variant) in hom_calls.iter().enumerate() {
-        let variant_pos: i64 = variant.position();
-        if aligned_range.contains(&variant_pos) {
-            if first_hom_overlap.is_none() {
-                first_hom_overlap = Some(i);
-            }
-            last_hom_overlap = i+1;
-        }
-    }
-    let first_hom_overlap: usize = first_hom_overlap.unwrap_or(0);
-
-    // .seq() returns Seq<'_> type, but we should just full decode
-    let read_sequence: Vec<u8> = read.seq().as_bytes();
-    let read_qualities: &[u8] = read.qual();
-    assert_eq!(read_sequence.len(), read_qualities.len());
-    
-    // these should always exist based on how we set it up
-    let read_start: usize = *coordinate_lookup.get(&min_position).unwrap() as usize;
-    let read_end: usize = *coordinate_lookup.get(&max_position).unwrap() as usize;
-
-    // pull out the part of the read we're aligning against
-    let read_align: &[u8] = &read_sequence[read_start..(read_end+1)];
-
-    /*
-    Current state:
-    - we have the reference genome
-    - we have the part of the read that aligns in `read_align`, the full read sequence in `read_sequence`
-    - we have the indices of the first and last variant overlaps in `first_overlap` and `last_overlap`
-    
-    We need to populate:
-    - alleles
-    - quals
-    - read stats (see below)
-
-    Game plan:
-    - construct a graph representing just this reference location + relevant alleles
-    - while constructing, assign alleles to each new branch (it may be reference allele)
-    -- IF you have multiple alleles starting at the same coordinate (e.g. identical call), then do not create an in-between node; this should resolve in the tie-breaking as "identical"
-    -- so each branch should get a variant index + an allele assignment (0/1); reference alleles may end up with multiple 0 alleles in the event of multi-start
-    - align the read via POA
-    - look at the traversed nodes and copy the allele assignments; if anything is unassigned at the end, it gets 2; any with conflicting assignments get 2 also
-    - update stats according to the assignments, we can't really do exact right now (maybe we can look at score deltas from one node to the next?)
-    */
-    let chromosome = phase_problem.get_chrom();
-    let chrom_seq: &[u8] = reference_genome.get_full_chromosome(chromosome);
-    
-    // we need to also provide any preset alleles
-    let start_time = std::time::Instant::now();
-    let (wfa_graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-        WFAGraph::from_reference_variants_with_hom(
-            chrom_seq, 
-            &variant_calls[first_overlap..last_overlap], // these are both range style indices
-            &hom_calls[first_hom_overlap..last_hom_overlap],
-            min_position as usize, 
-            max_position as usize + 1,
-            global_max_edit_distance
-        ).unwrap();
-    
-    // pass through for the WFA errors now
-    let wfa_result: WFAResult = wfa_graph.edit_distance_with_pruning(read_align, wfa_prune_distance)?;
-    
-    debug!(
-        "B#{} WFAGraph result ({}) => num_nodes: {}, read_len: {}, variant_overlaps: {}, edit_distance: {}", 
-        phase_problem.get_block_index(), start_time.elapsed().as_secs_f32(), wfa_graph.get_num_nodes(), max_position-min_position+1, num_overlaps, wfa_result.score()
-    );
-    
-    // edit_distances.push(wfa_result.score());
-
-    //we will populate these with the variant level info
-    let mut alleles: Vec<AlleleType> = vec![AlleleType::NoOverlap; num_variants];
-    for traversed_index in wfa_result.traversed_nodes().iter() {
-        for &(var_index, allele_assignment) in node_to_alleles.get(traversed_index).unwrap_or(&vec![]).iter() {
-            let correct_index: usize = first_overlap+var_index;
-            if alleles[correct_index] == AlleleType::NoOverlap {
-                alleles[correct_index] = AlleleType::from_repr(allele_assignment).unwrap_or(AlleleType::NoOverlap);
-            } else if alleles[correct_index] != AlleleType::from_repr(allele_assignment).unwrap_or(AlleleType::NoOverlap) {
-                alleles[correct_index] = AlleleType::Ambiguous;
-            }
-        }
     }
     
     // go through the result counting assigned and setting qualities
@@ -863,5 +926,5 @@ fn global_realignment(
         1, 0
     );
 
-    Ok((alleles, quals, segment_stats, wfa_result.score()))
+    Ok((alleles, quals, segment_stats, wfa_total_score))
 }

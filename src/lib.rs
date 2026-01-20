@@ -13,6 +13,8 @@ pub mod phaser;
 pub mod read_parsing;
 /// Basic helpful utilities for pairwise sequence alignment
 pub mod sequence_alignment;
+/// Optimizes the order variants are processed in the phaser
+pub mod variant_traversal;
 /// Graph-based WFA - this is basically POA + WFA, but only allowing for measuring edit distance and no loops
 pub mod wfa_graph;
 /// Contains all the various output writer functionality

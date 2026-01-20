@@ -1,7 +1,8 @@
 
-use hiphase::block_gen::{MultiPhaseBlockIterator, PhaseBlockIterator, get_vcf_samples, get_sample_bams};
+use hiphase::block_gen::{MultiPhaseBlockIterator, PhaseBlock, PhaseBlockIterator, get_sample_bams, get_vcf_samples};
 use hiphase::cli::{Settings,check_settings,get_raw_settings};
 use hiphase::data_types::reference_genome::ReferenceGenome;
+use hiphase::data_types::variants::{VariantType, Zygosity};
 use hiphase::phaser::{HaplotagResult, PhaseResult, solve_block, create_unphased_result};
 use hiphase::writers::block_stats::BlockStatsCollector;
 use hiphase::writers::haplotag_writer::HaplotagWriter;
@@ -12,10 +13,23 @@ use hiphase::writers::vcf_util::build_bcf_index;
 
 use log::{LevelFilter, debug, error, info, warn};
 use rustc_hash::FxHashMap as HashMap;
+use std::any::Any;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
-use threadpool::ThreadPool;
+
+/// Type alias for variant statistics from the block iterator
+type VariantStats = HashMap<(String, String, VariantType, Zygosity), usize>;
+
+/// Messages sent from the primary (block-generating) thread to the main thread
+enum WorkerThreadMessage {
+    /// A block count message, which will be sent after all blocks are submitted
+    BlockCount(u64),
+    /// A batch of phasing results to process
+    BatchPhaseJobResult(Vec<(PhaseResult, HaplotagResult)>),
+    /// Variant statistics collected from the block iterator
+    VariantStats(Box<VariantStats>),
+}
 
 fn main() {
     // get the settings
@@ -72,82 +86,10 @@ fn main() {
         }
     };
 
-    //here's where the fun starts
-    //generate blocks
-    let mut block_iterators: Vec<PhaseBlockIterator> = vec![];
-    let mut all_used_bams = vec![];
-    let mut sample_to_bams: HashMap<String, Vec<PathBuf>> = Default::default();
-    let mut sample_to_output_bams: HashMap<String, Vec<PathBuf>> = Default::default();
-    for sample_name in sample_names.iter() {
-        // figure out which BAMS go with the given sample
-        let (mut sample_bams, bam_indices) = if cli_settings.ignore_read_groups {
-            // if we are ignoring read groups, then we use all bams (and all indices)
-            (
-                cli_settings.bam_filenames.clone(),
-                (0..cli_settings.bam_filenames.len()).collect()
-            )
-        } else {
-            match get_sample_bams(&cli_settings.bam_filenames, sample_name, &cli_settings.reference_filename) {
-                Ok(sb) => sb,
-                Err(e) => {
-                    error!("Error during BAM read group parsing: {}", e);
-                    std::process::exit(exitcode::IOERR);
-                }
-            }
-        };
-        sample_to_bams.insert(sample_name.clone(), sample_bams.clone());
-
-        // make a phase block iterator using just the sample-specific bams
-        let block_iterator: PhaseBlockIterator = match PhaseBlockIterator::new(
-            &cli_settings.vcf_filenames,
-            &sample_bams,
-            &cli_settings.reference_filename,
-            sample_name.clone(),
-            cli_settings.min_variant_quality,
-            cli_settings.min_mapping_quality,
-            cli_settings.min_spanning_reads,
-            !cli_settings.disable_supplemental_joins,
-            &bam_thread_pool
-        ) {
-            Ok(bi) => bi,
-            Err(e) => {
-                error!("Error during file loading: {}", e);
-                std::process::exit(exitcode::IOERR);
-            }
-        };
-
-        // add the iterator to our list to put together
-        block_iterators.push(block_iterator);
-
-        // also save the used bams, we will check these soon
-        all_used_bams.append(&mut sample_bams);
-
-        // check if we need to save names for BAM writing
-        if !cli_settings.output_bam_filenames.is_empty() {
-            let mut sample_output_bams = vec![];
-            for &b_index in bam_indices.iter() {
-                sample_output_bams.push(cli_settings.output_bam_filenames[b_index].clone());
-            }
-            sample_to_output_bams.insert(sample_name.clone(), sample_output_bams);
-        }
-    }
-
-    if cli_settings.bam_filenames.len() != all_used_bams.len() {
-        let num_provided = cli_settings.bam_filenames.len();
-        let num_used = all_used_bams.len();
-        error!("User provided {} BAM files, but only {} matched samples for phasing", num_provided, num_used);
-        error!("Please remove extra BAM files or add additional samples, BAMs matching phasing: {:?}", all_used_bams);
-        std::process::exit(exitcode::IOERR);
-    }
-
-    // create our joint iterator
-    let mut block_iterator: MultiPhaseBlockIterator = match MultiPhaseBlockIterator::new(block_iterators) {
-        Ok(mpbi) => mpbi,
-        Err(e) => {
-            error!("Error during phase block iterator creation: {}", e);
-            std::process::exit(exitcode::IOERR);
-        }
-    };
+    // here's where the fun starts
+    // generate blocks and sample-to-BAM mappings
+    let (mut block_iterator, sample_to_bams, sample_to_output_bams) = 
+        create_block_iterator(&cli_settings, &sample_names, &bam_thread_pool);
 
     // this writer will write "in-order" provided we correctly pass the ordering of data to it
     let mut vcf_writer: OrderedVcfWriter = match OrderedVcfWriter::new(
@@ -263,12 +205,15 @@ fn main() {
     let start_time: Instant = Instant::now();
     let mut total_variants: u64 = 0;
     let mut results_received: u64 = 0;
+    let mut variant_stats: Option<VariantStats> = None;
     
     // values related to printing
     const UPDATE_SPEED: u64 = 100;
     info!("Phase block generation starting...");
 
     if cli_settings.threads <= 1 {
+        // single-threaded mode, so we just loop through the blocks sequentially and write results as we go
+        let phasing_config = cli_settings.phasing_config();
         for (i, block_result) in block_iterator.by_ref().enumerate().skip(skip_count).take(take_count) {
             let block = match block_result {
                 Ok(b) => b,
@@ -287,12 +232,7 @@ fn main() {
                     &cli_settings.vcf_filenames,
                     sample_bams,
                     &arc_reference_genome,
-                    cli_settings.reference_buffer,
-                    cli_settings.min_matched_alleles,
-                    cli_settings.min_mapping_quality,
-                    cli_settings.phase_min_queue_size,
-                    cli_settings.phase_queue_increment,
-                    cli_settings.global_realignment_config()
+                    &phasing_config
                 ) {
                     Ok(r) => r,
                     Err(e) => {
@@ -315,149 +255,237 @@ fn main() {
                 &mut vcf_writer, &mut opt_bam_writers,
             );
 
-            if results_received % UPDATE_SPEED == 0 {
+            if results_received.is_multiple_of(UPDATE_SPEED) {
                 let time_so_far: f64 = start_time.elapsed().as_secs_f64();
                 let blocks_per_sec: f64 = results_received as f64 / time_so_far;
                 let variants_per_sec: f64 = total_variants as f64 / time_so_far;
                 info!("Received results for {} phase blocks: {:.4} blocks/sec, {:.4} hets/sec, writer waiting on block {}", results_received, blocks_per_sec, variants_per_sec, vcf_writer.get_wait_block());
             }
         }
+
+        // we need to get the variant stats from the block iterator because it will be dropped in the primary thread
+        variant_stats = Some(block_iterator.variant_stats());
     } else {
+        // we are going parallel, pull in rayon to handle the pool and threading
+        // first, we need to drop the iterator because it will get recreated in the primary thread
+        std::mem::drop(block_iterator);
+
+        // clone the settings and sample names so we can pass them to the threads
+        let cli_settings = cli_settings.clone();
+        let sample_names = sample_names.clone();
+        let arc_reference_genome = arc_reference_genome.clone();
+
         //set up job configuration
         info!("Starting job pool with {} threads...", cli_settings.threads);
-        let job_slots: u64 = 40 * cli_settings.threads as u64;
         let mut jobs_queued: u64 = 0;
         
-        //we need to set up the multiprocessing components now
-        let pool = ThreadPool::new(cli_settings.threads);
-        let (tx, rx) = mpsc::channel();
+        // we need to set up the multiprocessing components now
+        // a panic handler is provided so we can semi-cleanly exit the program if an unexpected panic occurs
+        // if any of the threads use std::process::exit, the program will exit with the appropriate code still
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(cli_settings.threads as usize)
+            .panic_handler(handle_thread_panic)
+            .build_global() {
+            Ok(()) => {},
+            Err(e) => {
+                error!("Error while building thread pool: {e}");
+                std::process::exit(exitcode::OSERR);
+            }
+        };
+
+        // channel for the primary thread to send messages back to the main thread
+        let (tx, rx) = mpsc::channel::<WorkerThreadMessage>();
+        let arc_phasing_config = Arc::new(cli_settings.phasing_config());
         let arc_cli_settings: Arc<Settings> = Arc::new(cli_settings.clone());
         let arc_sample_to_bams = Arc::new(sample_to_bams.clone());
 
-        for (i, block_result) in block_iterator.by_ref().enumerate().skip(skip_count).take(take_count) {
-            // make sure no panics encountered so far
-            if pool.panic_count() > 0 {
-                error!("Panic detected in ThreadPool, check above for details.");
-                std::process::exit(exitcode::SOFTWARE);
-            }
-
-            if jobs_queued - results_received >= job_slots {
-                let (phase_result, haplotag_result): (PhaseResult, HaplotagResult) = rx.recv().unwrap();
-                
-                // this is only for printing
-                total_variants += phase_result.phase_block.get_num_variants() as u64;
-                results_received += 1;
-                                
-                process_results(
-                    phase_result, haplotag_result, 
-                    &mut stats_writer, &mut block_collector, &mut haplotag_writer,
-                    &mut vcf_writer, &mut opt_bam_writers
-                );
-
-                if results_received % UPDATE_SPEED == 0 {
-                    let time_so_far: f64 = start_time.elapsed().as_secs_f64();
-                    let blocks_per_sec: f64 = results_received as f64 / time_so_far;
-                    let variants_per_sec: f64 = total_variants as f64 / time_so_far;
-                    info!("Received results for {} phase blocks: {:.4} blocks/sec, {:.4} hets/sec, writer waiting on block {}", results_received, blocks_per_sec, variants_per_sec, vcf_writer.get_wait_block());
-                }
-            }
-            
-            let block = match block_result {
-                Ok(b) => b,
+        rayon::spawn(move || {
+            // shared thread pool for bam IO
+            let bam_thread_pool = match rust_htslib::tpool::ThreadPool::new(cli_settings.io_threads.unwrap() as u32) {
+                Ok(btp) => btp,
                 Err(e) => {
-                    error!("Error while parsing VCF file: {}", e);
+                    error!("Error while starting thread pool: {}", e);
                     std::process::exit(exitcode::IOERR);
                 }
             };
-            debug!("block {}: {:?} {}", i, block, block.bp_len());
 
-            jobs_queued += 1;
-            if jobs_queued % UPDATE_SPEED == 0 {
-                info!("Generated {} phase blocks, latest block: {:?}", jobs_queued, block); 
-            }
+            // generate blocks and sample-to-BAM mappings
+            let (mut block_iterator, _sample_to_bams, _sample_to_output_bams) = 
+                create_block_iterator(&arc_cli_settings, &sample_names, &bam_thread_pool);
 
-            if !block.unphased_block() && (phase_singletons || block.get_num_variants() > 1) {
-                let tx = tx.clone();
-                let arc_cli_settings = arc_cli_settings.clone();
-                let arc_reference_genome = arc_reference_genome.clone();
-                let arc_sample_to_bams = arc_sample_to_bams.clone();
-                
-                pool.execute(move|| {
-                    let sample_bams = arc_sample_to_bams.get(block.sample_name()).unwrap();
-                    // dynamic errors cannot be sent via mpsc, so we need to handle errors here
-                    let all_results = match solve_block(
-                        &block,
-                        &arc_cli_settings.vcf_filenames,
-                        sample_bams,
-                        &arc_reference_genome,
-                        arc_cli_settings.reference_buffer,
-                        arc_cli_settings.min_matched_alleles,
-                        arc_cli_settings.min_mapping_quality,
-                        arc_cli_settings.phase_min_queue_size,
-                        arc_cli_settings.phase_queue_increment,
-                        arc_cli_settings.global_realignment_config()
-                    ) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            error!("Error while processing {:?}:", block);
-                            error!("  {}", e);
-                            std::process::exit(exitcode::SOFTWARE);
-                        }
-                    };
-                    tx.send(all_results).expect("channel will be there waiting for the pool");
-                });
-            } else {
-                // this is a unphased block we can short-circuit here
-                let (phase_result, haplotag_result): (PhaseResult, HaplotagResult) = 
-                    create_unphased_result(&block);
-                
-                // this is only for printing
-                total_variants += phase_result.phase_block.get_num_variants() as u64;
-                results_received += 1;
-                                
-                process_results(
-                    phase_result, haplotag_result, 
-                    &mut stats_writer, &mut block_collector, &mut haplotag_writer,
-                    &mut vcf_writer, &mut opt_bam_writers
-                );
+            // we will collect the results here and send them back to the main thread in batches
+            let batch_check_modulo = UPDATE_SPEED;
+            let mut batch_problems: Vec<PhaseBlock> = vec![];
 
-                if results_received % UPDATE_SPEED == 0 {
-                    let time_so_far: f64 = start_time.elapsed().as_secs_f64();
-                    let blocks_per_sec: f64 = results_received as f64 / time_so_far;
-                    let variants_per_sec: f64 = total_variants as f64 / time_so_far;
-                    info!("Received results for {} phase blocks: {:.4} blocks/sec, {:.4} hets/sec, writer waiting on block {}", results_received, blocks_per_sec, variants_per_sec, vcf_writer.get_wait_block());
+            // in an ideal world, we could use par_bridge here, but MultiPhaseBlockIterator does not implement Send (due to htslib)
+            // if we ever decide to use something like noodles, we can revisit this, but it's not clear there's a benefit
+            for (i, block_result) in block_iterator.by_ref()
+                .enumerate().skip(skip_count).take(take_count) {
+                let block = match block_result {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!("Error while parsing VCF file: {}", e);
+                        std::process::exit(exitcode::IOERR);
+                    }
+                };
+                debug!("block {}: {:?} {}", i, block, block.bp_len());
+
+                // update the job count and print an update if we're on the mod of our speed
+                jobs_queued += 1;
+                if jobs_queued.is_multiple_of(UPDATE_SPEED) {
+                    info!("Generated {} phase blocks, latest block: {:?}", jobs_queued, block);
+                }
+
+                // check if we are phasing or short-circuiting
+                if !block.unphased_block() && (phase_singletons || block.get_num_variants() > 1) {
+                    // we are phasing, so clone all the Arcs and channels for the thread
+                    let tx = tx.clone();
+                    let arc_cli_settings = arc_cli_settings.clone();
+                    let arc_phasing_config = arc_phasing_config.clone();
+                    let arc_reference_genome = arc_reference_genome.clone();
+                    let arc_sample_to_bams = arc_sample_to_bams.clone();
+
+                    // spawn a thread to handle the phasing
+                    rayon::spawn(move|| {
+                        let sample_bams = arc_sample_to_bams.get(block.sample_name()).unwrap();
+
+                        // dynamic errors cannot be sent via mpsc, so we need to handle errors here
+                        let (phase_result, haplotag_result) = match solve_block(
+                            &block,
+                            &arc_cli_settings.vcf_filenames,
+                            sample_bams,
+                            &arc_reference_genome,
+                            &arc_phasing_config
+                        ) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                error!("Error while processing {:?}:", block);
+                                error!("  {}", e);
+                                std::process::exit(exitcode::SOFTWARE);
+                            }
+                        };
+
+                        // send the result back to the main thread
+                        tx.send(WorkerThreadMessage::BatchPhaseJobResult(
+                            vec![(phase_result, haplotag_result)]
+                        )).expect("channel will be there waiting for the pool");
+                    });
+                } else {
+                    // short-circuiting, so we can just create the unphased result
+                    // let (phase_result, haplotag_result) = create_unphased_result(&block);
+                    batch_problems.push(block);
+                }
+
+                // check if we need to send a batch of simple problems to the thread
+                // we do this in a separate thread because otherwise the main thread can get mutex-blocked on tx.send()
+                if jobs_queued.is_multiple_of(batch_check_modulo) && !batch_problems.is_empty() {
+                    debug!("Sending batch of {} problems to thread...", batch_problems.len());
+
+                    // we need to send the batch of problems to the thread and clear create a new batch list
+                    let thread_batches = batch_problems;
+                    batch_problems = vec![];
+
+                    // clone the channel for the thread
+                    let tx = tx.clone();
+                    rayon::spawn(move || {
+                        // we need to create the unphased results for the batch
+                        let batch_job_results: Vec<(PhaseResult, HaplotagResult)> = thread_batches.iter()
+                            .map(|block| {
+                                create_unphased_result(block)
+                            })
+                            .collect();
+
+                        // send the batch of results back to the main thread
+                        tx.send(WorkerThreadMessage::BatchPhaseJobResult(batch_job_results))
+                            .expect("channel will be there waiting for the pool");
+                    });
                 }
             }
+
+            // if there are any problems left, we need to send them to the thread
+            if !batch_problems.is_empty() {
+                debug!("Sending batch of {} problems to thread...", batch_problems.len());
+
+                // we need to send the batch of problems to the thread and clear create a new batch list
+                let thread_batches = batch_problems;
+
+                // clone the channel for the thread
+                let tx = tx.clone();
+
+                rayon::spawn(move || {
+                    // we need to create the unphased results for the batch
+                    let batch_job_results: Vec<(PhaseResult, HaplotagResult)> = thread_batches.iter()
+                        .map(|block| {
+                            create_unphased_result(block)
+                        })
+                        .collect();
+
+                    // send the batch of results back to the main thread
+                    tx.send(WorkerThreadMessage::BatchPhaseJobResult(batch_job_results))
+                        .expect("channel will be there waiting for the pool");
+                });
+            }
+            
+            // all jobs are submitted, send the block count and variant stats back to the main thread
+            info!("Phase block generation complete, found {jobs_queued} phase blocks.");
+            tx.send(WorkerThreadMessage::BlockCount(jobs_queued))
+                .expect("channel will be there waiting for the pool");
+            tx.send(WorkerThreadMessage::VariantStats(Box::new(block_iterator.variant_stats())))
+                .expect("channel will be there waiting for the pool");
+        });
+
+        let mut jobs_queued: Option<u64> = None;
+        while let Ok(message) = rx.recv() {
+            // handle the message type we received
+            match message {
+                // a block count message, which will be sent after all blocks are submitted
+                WorkerThreadMessage::BlockCount(count) => {
+                    jobs_queued = Some(count);
+                },
+                // a batch of phase job results, which are primarily the short-circuiting results
+                WorkerThreadMessage::BatchPhaseJobResult(batch_job_results) => {
+                    // we need to process the batch of results
+                    for (phase_result, haplotag_result) in batch_job_results.into_iter() {
+                        // this is only for printing
+                        total_variants += phase_result.phase_block.get_num_variants() as u64;
+                        results_received += 1;
+
+                        process_results(
+                            phase_result, haplotag_result,
+                            &mut stats_writer, &mut block_collector, &mut haplotag_writer,
+                            &mut vcf_writer, &mut opt_bam_writers
+                        );
+
+                        // do an update if we're on the mod of our speed OR it's the last one for a thread
+                        if results_received.is_multiple_of(UPDATE_SPEED) || (jobs_queued.unwrap_or(u64::MAX) - results_received) < cli_settings.threads as u64 {
+                            let time_so_far: f64 = start_time.elapsed().as_secs_f64();
+                            let blocks_per_sec: f64 = results_received as f64 / time_so_far;
+                            let variants_per_sec: f64 = total_variants as f64 / time_so_far;
+                            if let Some(jobs_queued) = jobs_queued {
+                                info!("Received results for {} / {} phase blocks: {:.4} blocks/sec, {:.4} hets/sec, writer waiting on block {}", results_received, jobs_queued, blocks_per_sec, variants_per_sec, vcf_writer.get_wait_block());
+                            } else {
+                                info!("Received results for {} phase blocks: {:.4} blocks/sec, {:.4} hets/sec, writer waiting on block {}", results_received, blocks_per_sec, variants_per_sec, vcf_writer.get_wait_block());
+                            }
+                        }
+                    }
+                },
+                // a variant stats message, which will be sent after all jobs are submitted and just goes into summary stats
+                WorkerThreadMessage::VariantStats(stats) => {
+                    // save the variant stats for later use
+                    variant_stats = Some(*stats);
+                }
+            };
         }
 
-        while results_received < jobs_queued {
-            // make sure no panics encountered so far
-            // TODO: if we hit deadlocks from panics, we may need to add this with some sort of suitable timeout:
-            //       https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.recv_timeout
-            if pool.panic_count() > 0 {
-                error!("Panic detected in ThreadPool, check above for details.");
+        // the rx closed, so we should have all the results now
+        if let Some(jobs_queued) = jobs_queued {
+            if results_received != jobs_queued {
+                error!("Results received count does not match jobs queued count, cannot finalize output files");
                 std::process::exit(exitcode::SOFTWARE);
             }
-
-            let (phase_result, haplotag_result): (PhaseResult, HaplotagResult) = rx.recv().unwrap();
-            
-            // this is only for printing
-            total_variants += phase_result.phase_block.get_num_variants() as u64;
-            results_received += 1;
-            
-            process_results(
-                phase_result, haplotag_result, 
-                &mut stats_writer, &mut block_collector, &mut haplotag_writer,
-                &mut vcf_writer, &mut opt_bam_writers
-            );
-
-            // do an update if we're on the mod of our speed OR it's the last one for a thread
-            if results_received % UPDATE_SPEED == 0 || (jobs_queued - results_received) < cli_settings.threads as u64 {
-                let time_so_far: f64 = start_time.elapsed().as_secs_f64();
-                let blocks_per_sec: f64 = results_received as f64 / time_so_far;
-                let variants_per_sec: f64 = total_variants as f64 / time_so_far;
-                info!("Received results for {} / {} phase blocks: {:.4} blocks/sec, {:.4} hets/sec, writer waiting on block {}", results_received, jobs_queued, blocks_per_sec, variants_per_sec, vcf_writer.get_wait_block());
-            }
+        } else {
+            error!("Jobs queued count was not received, cannot finalize output files");
+            std::process::exit(exitcode::SOFTWARE);
         }
     }
 
@@ -477,17 +505,18 @@ fn main() {
 
     // now we drop the VCF writer, this is to close out all the VCF files before indexing
     std::mem::drop(vcf_writer);
+    info!("Indexing output VCF files:");
     for vcf_fn in cli_settings.output_vcf_filenames.iter() {
+        info!("\tIndexing {:?}...", vcf_fn);
         match build_bcf_index(vcf_fn, None, cli_settings.threads as u32, !cli_settings.csi_index) {
-            Ok(()) => {
-                info!("Finished building index for {:?}.", vcf_fn);
-            },
+            Ok(()) => {},
             Err(e) => {
                 error!("Error while building index for {:?}: {}", vcf_fn, e);
                 std::process::exit(exitcode::IOERR);
             }
         };
     }
+    info!("Finished indexing all output VCF files.");
 
     if let Some(bam_writers) = opt_bam_writers.as_mut() {
         // if we are only doing partial files, this will not behave, so skip it
@@ -517,7 +546,9 @@ fn main() {
         std::mem::drop(opt_bam_writers);
 
         // index the BAM files with .bai files
+        info!("Indexing output BAM files:");
         for bam_fn in cli_settings.output_bam_filenames.iter() {
+            info!("\tIndexing {:?}...", bam_fn);
             let idx_type = if cli_settings.csi_index {
                 rust_htslib::bam::index::Type::Csi(14)  
             } else {
@@ -529,15 +560,14 @@ fn main() {
                 idx_type,
                 cli_settings.threads as u32
             ) {
-                Ok(()) => {
-                    info!("Finished building index for {:?}.", bam_fn);
-                },
+                Ok(()) => {},
                 Err(e) => {
                     error!("Error while building index for {:?}: {}", bam_fn, e);
                     std::process::exit(exitcode::IOERR);
                 }
             };
         }
+        info!("Finished indexing all output BAM files.");
     }
 
     if let Some(ref filename) = cli_settings.blocks_filename {
@@ -555,9 +585,17 @@ fn main() {
     if let Some(ref filename) = cli_settings.summary_filename {
         // this will save chromosome level stats to a csv/tsv file
         info!("Saving summary block statistics to {:?}...", filename);
+        let variant_stats = match variant_stats {
+            Some(stats) => stats,
+            None => {
+                error!("Variant stats were not collected, cannot write summary statistics");
+                std::process::exit(exitcode::IOERR);
+            }
+        };
+
         match block_collector.write_block_stats(
             &sample_names, filename, &arc_reference_genome, 
-            block_iterator.variant_stats()
+            variant_stats
         ) {
             Ok(()) => {},
             Err(e) => {
@@ -568,6 +606,121 @@ fn main() {
     }
 
     info!("All phase blocks finished successfully after {} seconds.", start_time.elapsed().as_secs_f64());
+}
+
+/// A tuple mostly to make clippy happy
+/// # Fields
+/// * `block_iterator` - the block iterator for the combined samples
+/// * `sample_to_bams` - a mapping of sample names to the BAM files used for that sample
+/// * `sample_to_output_bams` - a mapping of sample names to the BAM files to write to
+type BlockIteratorFields = (MultiPhaseBlockIterator, HashMap<String, Vec<PathBuf>>, HashMap<String, Vec<PathBuf>>);
+
+/// Creates a MultiPhaseBlockIterator along with sample-to-BAM mappings.
+/// This function *must* be deterministic, otherwise there could be a desync in the block iterator and the writers.
+/// # Arguments
+/// * `cli_settings` - the CLI settings
+/// * `sample_names` - the sample names to process
+/// * `bam_thread_pool` - the thread pool for BAM IO
+fn create_block_iterator(
+    cli_settings: &Settings,
+    sample_names: &[String],
+    bam_thread_pool: &rust_htslib::tpool::ThreadPool,
+) -> BlockIteratorFields {
+    let mut block_iterators: Vec<PhaseBlockIterator> = vec![];
+    let mut all_used_bams = vec![];
+    let mut sample_to_bams: HashMap<String, Vec<PathBuf>> = Default::default();
+    let mut sample_to_output_bams: HashMap<String, Vec<PathBuf>> = Default::default();
+
+    for sample_name in sample_names.iter() {
+        // figure out which BAMS go with the given sample
+        let (mut sample_bams, bam_indices) = if cli_settings.ignore_read_groups {
+            // if we are ignoring read groups, then we use all bams (and all indices)
+            (
+                cli_settings.bam_filenames.clone(),
+                (0..cli_settings.bam_filenames.len()).collect()
+            )
+        } else {
+            match get_sample_bams(&cli_settings.bam_filenames, sample_name, &cli_settings.reference_filename) {
+                Ok(sb) => sb,
+                Err(e) => {
+                    error!("Error during BAM read group parsing: {}", e);
+                    std::process::exit(exitcode::IOERR);
+                }
+            }
+        };
+        sample_to_bams.insert(sample_name.clone(), sample_bams.clone());
+
+        // make a phase block iterator using just the sample-specific bams
+        let block_iterator: PhaseBlockIterator = match PhaseBlockIterator::new(
+            &cli_settings.vcf_filenames,
+            &sample_bams,
+            &cli_settings.reference_filename,
+            sample_name.clone(),
+            cli_settings.min_variant_quality,
+            cli_settings.min_mapping_quality,
+            cli_settings.min_spanning_reads,
+            !cli_settings.disable_supplemental_joins,
+            bam_thread_pool
+        ) {
+            Ok(bi) => bi,
+            Err(e) => {
+                error!("Error during file loading: {}", e);
+                std::process::exit(exitcode::IOERR);
+            }
+        };
+
+        // add the iterator to our list to put together
+        block_iterators.push(block_iterator);
+
+        // also save the used bams, we will check these soon
+        all_used_bams.append(&mut sample_bams);
+
+        // check if we need to save names for BAM writing
+        if !cli_settings.output_bam_filenames.is_empty() {
+            let mut sample_output_bams = vec![];
+            for &b_index in bam_indices.iter() {
+                sample_output_bams.push(cli_settings.output_bam_filenames[b_index].clone());
+            }
+            sample_to_output_bams.insert(sample_name.clone(), sample_output_bams);
+        }
+    }
+
+    if cli_settings.bam_filenames.len() != all_used_bams.len() {
+        let num_provided = cli_settings.bam_filenames.len();
+        let num_used = all_used_bams.len();
+        error!("User provided {} BAM files, but only {} matched samples for phasing", num_provided, num_used);
+        error!("Please remove extra BAM files or add additional samples, BAMs matching phasing: {:?}", all_used_bams);
+        std::process::exit(exitcode::IOERR);
+    }
+
+    // create our joint iterator
+    let block_iterator: MultiPhaseBlockIterator = match MultiPhaseBlockIterator::new(block_iterators) {
+        Ok(mpbi) => mpbi,
+        Err(e) => {
+            error!("Error during phase block iterator creation: {}", e);
+            std::process::exit(exitcode::IOERR);
+        }
+    };
+
+    (block_iterator, sample_to_bams, sample_to_output_bams)
+}
+
+/// Panic handler for the rayon thread pool that logs an error and exits the program
+/// # Arguments
+/// * `panic_info` - the panic information from the thread pool
+fn handle_thread_panic(panic_info: Box<dyn Any + Send>) {
+    // Try to extract a meaningful message from the panic payload
+    let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown panic".to_string()
+    };
+
+    error!("Panic detected in thread pool: {msg}");
+    error!("Exiting program due to panic in thread pool");
+    std::process::exit(exitcode::SOFTWARE);
 }
 
 /// Sub-routine to make sure we are always consistently processing results in an identical manner

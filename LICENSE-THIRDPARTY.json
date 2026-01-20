@@ -261,6 +261,33 @@
     "description": "Fast, SIMD-accelerated CRC32 (IEEE) checksum computation"
   },
   {
+    "name": "crossbeam-deque",
+    "version": "0.8.6",
+    "authors": null,
+    "repository": "https://github.com/crossbeam-rs/crossbeam",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Concurrent work-stealing deque"
+  },
+  {
+    "name": "crossbeam-epoch",
+    "version": "0.9.18",
+    "authors": null,
+    "repository": "https://github.com/crossbeam-rs/crossbeam",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Epoch-based garbage collection"
+  },
+  {
+    "name": "crossbeam-utils",
+    "version": "0.8.21",
+    "authors": null,
+    "repository": "https://github.com/crossbeam-rs/crossbeam",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Utilities for concurrent programming"
+  },
+  {
     "name": "csv",
     "version": "1.1.6",
     "authors": "Andrew Gallant <jamslam@gmail.com>",
@@ -505,7 +532,7 @@
   },
   {
     "name": "hiphase",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "authors": "J. Matthew Holt <mholt@pacificbiosciences.com>",
     "repository": null,
     "license": null,
@@ -810,15 +837,6 @@
     "description": "Numeric traits for generic mathematics"
   },
   {
-    "name": "num_cpus",
-    "version": "1.13.1",
-    "authors": "Sean McArthur <sean@seanmonstar.com>",
-    "repository": "https://github.com/seanmonstar/num_cpus",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "description": "Get the number of CPUs on a machine."
-  },
-  {
     "name": "num_threads",
     "version": "0.1.6",
     "authors": "Jacob Pratt <open-source@jhpratt.dev>",
@@ -1006,6 +1024,24 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Extra methods for raw pointers and `NonNull<T>`.  For example `.post_inc()` and `.pre_dec()` (c.f. `ptr++` and `--ptr`), `offset` and `add` for `NonNull<T>`, and the function `ptrdistance`."
+  },
+  {
+    "name": "rayon",
+    "version": "1.11.0",
+    "authors": null,
+    "repository": "https://github.com/rayon-rs/rayon",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Simple work-stealing parallelism for Rust"
+  },
+  {
+    "name": "rayon-core",
+    "version": "1.13.0",
+    "authors": null,
+    "repository": "https://github.com/rayon-rs/rayon",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Core APIs for Rayon"
   },
   {
     "name": "regex",
@@ -1240,15 +1276,6 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Implementation detail of the `thiserror` crate"
-  },
-  {
-    "name": "threadpool",
-    "version": "1.8.1",
-    "authors": "The Rust Project Developers|Corey Farwell <coreyf@rwell.org>|Stefan Schindler <dns2utf8@estada.ch>",
-    "repository": "https://github.com/rust-threadpool/rust-threadpool",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "description": "A thread pool for running a number of jobs on a fixed set of worker threads."
   },
   {
     "name": "time",

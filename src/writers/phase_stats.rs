@@ -128,6 +128,7 @@ fn add_assign_array(lhs: &mut [u64], rhs: &[u64]) {
 }
 
 /// Contains any statistics from the phasing problem solver that may be relevant
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PhaseStats {
     /// The number of solutions that were pruned during calculation
     pruned_solutions: Option<u64>,

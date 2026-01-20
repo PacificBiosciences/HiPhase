@@ -326,7 +326,8 @@ fn calculate_block_ng50(sorted_blocks: &[u64], contig_length: u64) -> u64 {
     let mut length_sum: u64 = 0;
 
     // add one to handle odd values (e.g. rounding up)
-    let target_length: u64 = (contig_length + 1) / 2;
+    // let target_length: u64 = (contig_length + 1) / 2;
+    let target_length: u64 = contig_length.div_ceil(2);
 
     for &block_size in sorted_blocks.iter().rev() {
         // we're going in reverse, so block sizes *should* be monotonically decreasing

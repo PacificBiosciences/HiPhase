@@ -15,8 +15,18 @@ pub enum AlleleType {
     NoOverlap=3
 }
 
+impl AlleleType {
+    /// Returns true if the allele is set (i.e. non-ambiguous and overlapping, so 0 or 1)
+    pub fn is_set(&self) -> bool {
+        match self {
+            AlleleType::Reference | AlleleType::Alternate => true,
+            AlleleType::Ambiguous | AlleleType::NoOverlap => false
+        }
+    }
+}
+
 /// Container for a read segment that has been converted into a variant representation
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ReadSegment {
     /// the read name
     read_name: String,
@@ -118,6 +128,17 @@ impl ReadSegment {
 
         // now just send it to the new function
         Self::new(read_name, alleles, quals)
+    }
+
+    /// Creates an identical read segment with an empty read name.
+    /// This allows us to count the number of times this segment appears in a region without knowing the read name.
+    pub fn dename_segment(&self) -> Self {
+        Self {
+            read_name: Default::default(),
+            alleles: self.alleles.clone(),
+            quals: self.quals.clone(),
+            region: self.region.clone()
+        }
     }
 
     pub fn read_name(&self) -> &str {
@@ -305,5 +326,21 @@ mod tests {
         // check stupid collapsing also
         let collapsed = ReadSegment::collapse(&[rs1.clone()]);
         assert_eq!(collapsed, rs1);
+    }
+
+    #[test]
+    fn test_dename_segment() {
+        let rs = ReadSegment::new(
+            "read_name".to_string(),
+            vec![3, 1, 0, 2, 1, 3, 3].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(),
+            vec![0, 2, 1, 0, 2, 0, 0]
+        );
+
+        // make sure the denamed segment is identical except for an empty read name
+        let denamed = rs.dename_segment();
+        assert_eq!(denamed.read_name(), "");
+        assert_eq!(denamed.region(), rs.region());
+        assert_eq!(denamed.alleles, rs.alleles);
+        assert_eq!(denamed.quals, rs.quals);
     }
 }
