@@ -669,6 +669,7 @@ impl PhaseBlockIterator {
     }
 
     /// Returns the next position after `pos` such that _at least_ `min_read_count` reads have been found.
+    /// This is used to determine the next position to advance to when we encounter a variant that is not covered by any reads or otherwise unphasable.
     /// # Arguments
     /// * `chrom` - the chromosome of the locus
     /// * `pos` - the position of the locus
@@ -751,6 +752,7 @@ impl PhaseBlockIterator {
                 // there can be multiple, so split on the delimiter and handle each one separately
                 let sa_strings: Vec<&str> = sa_tag.split_terminator(';').collect();
                 for &sa_str in sa_strings.iter() {
+                    // TODO: there are a lot of unwraps here, we should probably handle errors better at some point
                     // we expect exactly 6
                     let sa_frags: Vec<&str> = sa_str.split(',').collect();
                     assert_eq!(sa_frags.len(), 6);
@@ -772,7 +774,8 @@ impl PhaseBlockIterator {
                             Cigar::Match(c_len) | 
                             Cigar::Del(c_len) | 
                             Cigar::Equal(c_len) |
-                            Cigar::Diff(c_len) => {
+                            Cigar::Diff(c_len) |
+                            Cigar::RefSkip(c_len)=> {
                                 sa_end += *c_len as u64;
                             },
                             _ => {

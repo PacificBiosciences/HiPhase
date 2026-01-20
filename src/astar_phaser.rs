@@ -5,9 +5,18 @@ use crate::data_types::variants::Variant;
 use crate::writers::phase_stats::PhaseStats;
 
 use bio::data_structures::interval_tree::IntervalTree;
+use rustc_hash::FxHashMap as HashMap;
 use log::{debug,trace};
 use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
+
+/// Configuration for the A* phasing algorithm.
+pub struct AstarConfig {
+    /// The minimum queue size
+    pub min_queue_size: usize,
+    /// The queue increment
+    pub queue_increment: usize,
+}
 
 /// A node in the A* search tree.
 #[derive(Eq, Hash, PartialEq)]
@@ -72,7 +81,7 @@ impl AstarNode {
         allele1: AlleleType,
         allele2: AlleleType,
         heuristic_cost: u64, 
-        read_segments: &IntervalTree<usize, ReadSegment>,
+        read_segments: &IntervalTree<usize, (ReadSegment, usize)>,
         hap_offset: usize
     ) -> AstarNode {
         // make sure we didn't goof
@@ -91,8 +100,8 @@ impl AstarNode {
         let hap_len = h1.len()+hap_offset;
         for rs_interval in read_segments.find(hap_len-1..hap_len) {
             // calculate the cost of this segment with this phase block so far
-            let rs = rs_interval.data();
-            let rs_cost = std::cmp::min(
+            let (rs, count) = rs_interval.data();
+            let rs_cost = (*count as u64) * std::cmp::min(
                 rs.score_partial_haplotype(&h1[..], hap_offset),
                 rs.score_partial_haplotype(&h2[..], hap_offset)
             );
@@ -240,12 +249,11 @@ impl PQueueHapTracker {
 /// * `num_variants` - the number of variants in the phase block; run-time grows linearly as the number of variants increases
 /// * `max_segment_size` - the maximum number of variants to use when calculating sub-block heuristics; run-time grows a least linearly with this value
 /// * `read_segments` - the reads to use when calculating the heuristics costs; run-time grows linearly with the length of this data
-/// * `min_queue_size` - the minimum length of the queue
-/// * `queue_increment` - the length that the queue grows as more variants are added to the solution
+/// * `astar_config` - the configuration for the A* algorithm
 /// * `opt_bad_variants` - an optional set of "bad" or "ignored" variants that we should just ignore from the start
 fn calculate_astar_heuristic(
-    num_variants: usize, max_segment_size: usize, read_segments: &IntervalTree<usize, ReadSegment>,
-    min_queue_size: usize, queue_increment: usize, opt_bad_variants: Option<Vec<bool>>
+    num_variants: usize, max_segment_size: usize, read_segments: &IntervalTree<usize, (ReadSegment, usize)>,
+    astar_config: &AstarConfig, opt_bad_variants: Option<Vec<bool>>
 ) -> (Vec<u64>, Vec<bool>) {
     assert!(max_segment_size >= 2);
     // an extra slot is included because it makes some checks go away later
@@ -263,7 +271,7 @@ fn calculate_astar_heuristic(
         debug!("solving subproblem {}..{}", v_index, v_index+max_clip_size);
         let (max_estimate, solve_size): (u64, usize) = astar_subsolver(
             v_index, max_clip_size, read_segments, &heuristics[..], &bad_variants[..],
-            min_queue_size / 10, queue_increment
+            astar_config.min_queue_size / 10, astar_config.queue_increment
         );
         assert!(solve_size >= max_clip_size.min(2));
         debug!("  estimate => {} (solution distance => {}/{})", max_estimate, solve_size, max_clip_size);
@@ -309,7 +317,7 @@ fn calculate_astar_heuristic(
 /// * `min_queue_size` - the minimum length of the queue
 /// * `queue_increment` - the length that the queue grows as more variants are added to the solution
 fn astar_subsolver(
-    problem_offset: usize, problem_size: usize, read_segments: &IntervalTree<usize, ReadSegment>, 
+    problem_offset: usize, problem_size: usize, read_segments: &IntervalTree<usize, (ReadSegment, usize)>, 
     heuristic_costs: &[u64], bad_variants: &[bool], min_queue_size: usize, queue_increment: usize
 ) -> (u64, usize) {
     // now, the core looping algorithm
@@ -421,11 +429,10 @@ pub struct AstarResult {
 /// * `phase_block` - the phase block summary information
 /// * `variants` - the variants in the block, primarily passed-through to solution
 /// * `read_segments` - interval tree of the reads that serve as data points for the phasing algorithm
-/// * `min_queue_size` - the minimum length of the queue
-/// * `queue_increment` - the length that the queue grows as more variants are added to the solution
+/// * `astar_config` - the configuration for the A* algorithm
 pub fn astar_solver(
     phase_block: &PhaseBlock, variants: &[Variant], read_segments: &IntervalTree<usize, ReadSegment>,
-    min_queue_size: usize, queue_increment: usize
+    astar_config: &AstarConfig
 ) -> AstarResult {
     // we use this a lot
     let num_variants: usize = variants.len();
@@ -436,10 +443,15 @@ pub fn astar_solver(
         let segment = rse.data();
         for (var_index, v) in variants.iter().enumerate() {
             if v.is_ignored() {
-                assert!(segment.allele(var_index) == AlleleType::NoOverlap);
+                let allele = segment.allele(var_index);
+                assert!(allele == AlleleType::Ambiguous || allele == AlleleType::NoOverlap);
             }
         }
     }
+
+    // see if we can make a smaller interval tree to work with
+    let deidentified_segments = count_deidentified_segments(read_segments);
+    debug!("Deidentified segments: {:?}", deidentified_segments.find(0..usize::MAX).count());
 
     // add all the bad variants to this list that will seed the heuristic calculation list
     let bad_variants: Vec<bool> = variants.iter()
@@ -448,13 +460,13 @@ pub fn astar_solver(
     let opt_bad_variants: Option<Vec<bool>> = Some(bad_variants);
     
     // our queue has a flat size + a buffer for each variant encountered so far
-    let mut curr_queue_size_threshold: usize = min_queue_size;
+    let mut curr_queue_size_threshold: usize = astar_config.min_queue_size;
     let full_prune_enabled: bool = true; // this will make sure the pqueue.len() field stays below the `max_queue_size` for conserving memory
     
     // set max queue size to either 2 * the highest functional queue size OR a large constant, whichever is greater
     // the large constant help prevent over-use of the full pruning algorithm if the base queue values are small
     // let max_queue_size: usize = (2 * (min_queue_size + queue_increment * num_variants)).max(10000);
-    let max_queue_size: usize = 10 * min_queue_size; // old method was dynamic, but in practice I don't think actually mattered, lets fix it to something semi-large
+    let max_queue_size: usize = 10 * astar_config.min_queue_size; // old method was dynamic, but in practice I don't think actually mattered, lets fix it to something semi-large
 
     let mut min_progress: usize = 0;
     let mut pqueue: PriorityQueue<AstarNode, (Reverse<u64>, u64, Reverse<u64>)> = PriorityQueue::new();
@@ -465,7 +477,7 @@ pub fn astar_solver(
     // TODO: do we want to make this a parameter at some point?
     let max_segment_size: usize = 40;
     let (heuristic_costs, bad_variants): (Vec<u64>, Vec<bool>) = calculate_astar_heuristic(
-        num_variants, max_segment_size, read_segments, min_queue_size, queue_increment, opt_bad_variants
+        num_variants, max_segment_size, &deidentified_segments, astar_config, opt_bad_variants
     );
     debug!("Heuristics(<={}): {:?}", max_segment_size, heuristic_costs);
     debug!("Bad variants: {:?}", bad_variants);
@@ -498,8 +510,8 @@ pub fn astar_solver(
             debug!("B#{} ({}/{}, {:?} {}/{}) => {:?}", phase_block.get_block_index(), next_expected, num_variants, top_priority, hap_tracker.len(), pqueue.len(), top_node);
             next_expected += 1;
             if num_pruned == 0 {
-                curr_queue_size_threshold += queue_increment;
-                assert_eq!(curr_queue_size_threshold, min_queue_size + queue_increment * next_expected);
+                curr_queue_size_threshold += astar_config.queue_increment;
+                assert_eq!(curr_queue_size_threshold, astar_config.min_queue_size + astar_config.queue_increment * next_expected);
             }
         }
 
@@ -508,7 +520,7 @@ pub fn astar_solver(
             //println!("Pruning {:?} {:?}", top_priority, top_node);
             if num_pruned == 0 {
                 // first time we do this, we need to clear our queue size back to the minimum
-                curr_queue_size_threshold = min_queue_size;
+                curr_queue_size_threshold = astar_config.min_queue_size;
             }
             num_pruned += 1;
             continue;
@@ -520,7 +532,7 @@ pub fn astar_solver(
                 next_node_index,
                 &top_node, AlleleType::Ambiguous, AlleleType::Ambiguous,
                 heuristic_costs[allele_count+1], 
-                read_segments,
+                &deidentified_segments,
                 0
             );
             next_node_index += 1;
@@ -547,7 +559,7 @@ pub fn astar_solver(
                         next_node_index,
                         &top_node, h1, h2,
                         heuristic_costs[allele_count+1], 
-                        read_segments,
+                        &deidentified_segments,
                         0
                     );
                     next_node_index += 1;
@@ -632,6 +644,34 @@ pub fn astar_solver(
     }
 }
 
+/// This will count the number of times each deidentified segment appears in the read segments.
+/// It will also build an interval tree of the deidentified segments, which should be a lot smaller when coverage is high.
+/// # Arguments
+/// * `read_segments` - the read segments to count
+/// # Returns
+/// * `deidentified_segments` - the interval tree of deidentified segments with counts
+fn count_deidentified_segments(read_segments: &IntervalTree<usize, ReadSegment>) 
+-> IntervalTree<usize, (ReadSegment, usize)> {
+    // count the number of times each deidentified segment appears
+    let mut segment_counts: HashMap<ReadSegment, usize> = HashMap::default();
+    for rs in read_segments.find(0..usize::MAX) {
+        let segment = rs.data();
+        let deidentified_segment = segment.dename_segment();
+        segment_counts.entry(deidentified_segment)
+            .and_modify(|c| *c += 1) // add one to the count
+            .or_insert(1); // if it's not in the map, insert it with a count of 1 instead
+    }
+
+    // build the interval tree of deidentified segments, which should be a lot smaller when coverage is high
+    let mut deidentified_segments: IntervalTree<usize, (ReadSegment, usize)> = IntervalTree::new();
+    for (segment, count) in segment_counts.into_iter() {
+        deidentified_segments.insert(segment.region().clone(), (segment, count));
+    }
+
+    // ship it
+    deidentified_segments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -668,6 +708,7 @@ mod tests {
         let heuristic_costs: Vec<u64> = (0..(num_alleles+1)).map(|i| (num_alleles - i) as u64).collect();
         let hap_offset = 0;
         let read_segments = get_simple_reads(num_alleles);
+        let deidentified_segments = count_deidentified_segments(&read_segments);
 
         // test an all 0-hom mode
         let mut current_node = AstarNode::new(heuristic_costs[0]);
@@ -678,7 +719,7 @@ mod tests {
                 node_index,
                 &current_node, AlleleType::Reference, AlleleType::Reference,
                 heuristic_costs[i+1],
-                &read_segments,
+                &deidentified_segments,
                 hap_offset
             );
 
@@ -711,7 +752,7 @@ mod tests {
                 node_index,
                 &current_node, AlleleType::Reference, AlleleType::Alternate,
                 heuristic_costs[i+1],
-                &read_segments,
+                &deidentified_segments,
                 hap_offset
             );
 
@@ -740,7 +781,7 @@ mod tests {
                 node_index,
                 &current_node, AlleleType::Alternate, AlleleType::Alternate,
                 heuristic_costs[i+1],
-                &read_segments,
+                &deidentified_segments,
                 hap_offset
             );
 
@@ -795,5 +836,50 @@ mod tests {
         // make sure increasing threshold to the same value does nothing
         tracker.increase_threshold(4);
         assert_eq!(tracker.len(), 7);
+    }
+
+    #[test]
+    fn test_count_deidentified_segments() {
+        let num_rs1 = 10;
+        let rs1 = ReadSegment::new(
+            "read_name".to_string(),
+            vec![AlleleType::Reference, AlleleType::NoOverlap],
+            vec![1, 0]
+        );
+        let num_rs2 = 20;
+        let rs2 = ReadSegment::new(
+            "read_name_2".to_string(),
+            vec![AlleleType::NoOverlap, AlleleType::Alternate],
+            vec![0, 1]
+        );
+
+        let mut read_segments: IntervalTree<usize, ReadSegment> = IntervalTree::new();
+        for rs in std::iter::repeat(rs1).take(num_rs1)
+            .chain(std::iter::repeat(rs2).take(num_rs2)) {
+            read_segments.insert(rs.region().clone(), rs);
+        }
+
+        let deidentified_segments = count_deidentified_segments(&read_segments);
+        assert_eq!(deidentified_segments.find(0..usize::MAX).count(), 2);
+
+        // check the first deidentified segment
+        let (ds1, c1) = deidentified_segments.find(0..1).next().unwrap().data();
+        assert_eq!(ds1.read_name(), "");
+        assert_eq!(ds1.region(), &(0..1));
+        assert_eq!(ds1.allele(0), AlleleType::Reference);
+        assert_eq!(ds1.qual(0), 1);
+        assert_eq!(ds1.allele(1), AlleleType::NoOverlap);
+        assert_eq!(ds1.qual(1), 0);
+        assert_eq!(*c1, num_rs1);
+
+        // check the second deidentified segment
+        let (ds2, c2) = deidentified_segments.find(1..2).next().unwrap().data();
+        assert_eq!(ds2.read_name(), "");
+        assert_eq!(ds2.region(), &(1..2));
+        assert_eq!(ds2.allele(0), AlleleType::NoOverlap);
+        assert_eq!(ds2.qual(0), 0);
+        assert_eq!(ds2.allele(1), AlleleType::Alternate);
+        assert_eq!(ds2.qual(1), 1);
+        assert_eq!(*c2, num_rs2);
     }
 }

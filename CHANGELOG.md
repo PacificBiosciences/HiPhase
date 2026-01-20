@@ -1,3 +1,16 @@
+# v1.6.0
+## Changes
+* Added support for RNA sequencing dataset, which required or were facilitated by the following changes
+* Changed the quality values of local re-alignment to be fixed values that are half of those from global re-alignment, removing local base qualities from consideration. In aggregate, this had a negligible/slightly beneficial impact on accuracy.
+* Reduced run-time of high-coverage blocks by collapsing identical allele assignments (reads) with a corresponding weight
+* Replaced the linear post-phasing block breaker with a non-linear version
+  * Added a new parameter, `--min-connecting-reads`, that controls the minimum number of reads that are required to connect two variants. The default is 1, which reflects the behavior of the previous linear version. Increasing this value can substantially reduce switchflips errors at the cost of shorter phase blocks.
+  * This non-linear approach can create overlapping phase blocks, but each variant is only assigned to a single block. This is particularly common with RNA-seq datasets which may contain overlapping mapping in disjoint phase blocks.
+  * This approach slightly reduces errors in WGS samples. In RNA samples, this substantially reduces switchflip errors cause by erroneous block joints, especially with higher `--min-connecting-reads` values.
+* Added a new option, `--optimize-variant-order`, which enables a non-linear search traversal which is beneficial for RNA-seq reads
+* Added a new option, `--preset`, which sets and overrides multiple CLI options at once. Added an RNA-seq preset, which is described in the [user guide](./docs/user_guide.md#presets).
+* Multi-threading has been refactored to better distribute work across threads for the broader range of input types
+
 # v1.5.0
 ## Changes
 * Reduced memory footprint for large putative phase blocks by adjusting algorithms for storing read segment variants. Overall, this change has a negligible impact on memory usage for a typical human WGS dataset. However, sample types with much higher heterozygous variants per phase block (e.g., mouse) have significantly less peak memory usage (>80% reduction on tests).

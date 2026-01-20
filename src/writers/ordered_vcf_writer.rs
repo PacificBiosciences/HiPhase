@@ -1,6 +1,7 @@
 
 use crate::block_gen::is_phasable_variant;
 use crate::data_types::read_segments::AlleleType;
+use crate::data_types::variants::IgnoredVariantReason;
 use crate::phaser::PhaseResult;
 
 use log::{debug, trace};
@@ -22,7 +23,9 @@ struct SingleVariantPhase {
     /// haplotype 2
     h2: u8,
     /// phase block ID
-    block_id: usize
+    block_id: Option<usize>,
+    /// ignored reason
+    ignored_reason: Option<IgnoredVariantReason>
 }
 
 /// Structure that maintains order of phase problems while writing solutions.
@@ -158,12 +161,12 @@ impl OrderedVcfWriter {
     pub fn write_phase_block(&mut self, phase_result: PhaseResult) -> Result<(), Box<dyn std::error::Error>> {
         let block_index: usize = phase_result.phase_block.get_block_index();
         if block_index < self.current_index {
-            return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Block index is smaller than next expected index")));
+            return Err(Box::new(io::Error::other("Block index is smaller than next expected index")));
         }
         match self.map_store.insert(block_index, phase_result) {
             None => {},
             Some(_) => {
-                return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Block index was already present in the map_store")));
+                return Err(Box::new(io::Error::other("Block index was already present in the map_store")));
             }
         };
         self.drain_map_store()
@@ -219,7 +222,7 @@ impl OrderedVcfWriter {
                     let sample_name = phase_result.phase_block.sample_name();
                     for (vcf_index, phase_queue) in self.phase_queues.iter_mut().enumerate() {
                         let sample_queue: &mut VecDeque<SingleVariantPhase> = phase_queue.get_mut(sample_name).unwrap();
-                        let mut previous_block_id: usize = 0;
+                        let mut previous_block_id: Option<usize> = None;
                         for (haplotype_index, &h1_index) in phase_result.haplotype_1.iter().enumerate() {
                             if vcf_index == phase_result.variants[haplotype_index].get_vcf_index() {
                                 // h1 and h2 are just internal representations
@@ -230,13 +233,18 @@ impl OrderedVcfWriter {
                                 let h2 = phase_result.variants[haplotype_index].convert_index(h2_index);
 
                                 // add one here because we need it to be 1-based
-                                let block_id: usize = phase_result.block_ids[haplotype_index]+1;
-                                if haplotype_index == 0 || block_id != previous_block_id {
-                                    debug!("New block ID found for {}: {}", self.current_index, block_id);
+                                let block_id = phase_result.block_ids[haplotype_index]
+                                    .map(|id| id + 1);
+                                if let Some(bi) = block_id {
+                                    if block_id != previous_block_id {
+                                        debug!("New block ID found for {}: {}", self.current_index, bi);
+                                    }
+                                    previous_block_id = block_id;
                                 }
-                                previous_block_id = block_id;
 
-                                sample_queue.push_back(SingleVariantPhase { h1, h2, block_id });
+                                // get the ignored reason for this variant, if one exists
+                                let ignored_reason = phase_result.variants[haplotype_index].ignored_reason();
+                                sample_queue.push_back(SingleVariantPhase { h1, h2, block_id, ignored_reason });
                             } else {
                                 // this variant is not a part of this VCF file
                             }
@@ -376,12 +384,11 @@ impl OrderedVcfWriter {
                                     // algorithm decided it was better if these were homozygous allele
                                     // for now, we will just write out the original record
 
-                                    if h1 == u8::MAX {
+                                    if variant_to_write.ignored_reason == Some(IgnoredVariantReason::TandemRepeatOverlap) {
                                         // these were intentionally ignored by HiPhase, mark it as such
                                         phase_flags[sample_index] = "TR_OVERLAP".as_bytes().to_vec();
                                         flagged_variants = true;
                                     }
-
                                 } else {
                                     // we need to alter the genotypes for this sample to phased
                                     let sample_gt_offset: usize = 2 * sample_index;
@@ -393,7 +400,8 @@ impl OrderedVcfWriter {
                                     //   2. interpret that to bytes
                                     //   3. convert to a Vec for ownership
                                     ps_blocks[sample_index] = variant_to_write.block_id
-                                        .to_string().as_bytes().to_vec();
+                                        .map(|id| id.to_string().as_bytes().to_vec())
+                                        .unwrap_or_else(|| b".".to_vec());
                                     changes_made = true;
                                 }
                             } else {

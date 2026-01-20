@@ -32,6 +32,16 @@ pub enum VariantType {
     Unknown // make sure Unknown is always the last one in the list
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub enum IgnoredVariantReason {
+    /// Generic reason for ignoring a variant
+    Unknown,
+    /// Variant is fully contained within a tandem repeat
+    TandemRepeatOverlap,
+    /// No reads had an allele assignment for this variant
+    NoReadsAssigned,
+}
+
 /// Zygosity definitions, mostly used elsewhere
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum Zygosity {
@@ -89,8 +99,8 @@ pub struct Variant {
     index_allele1: u8,
 
     // auxiliary booleans
-    /// if true, flags this is a variant to ignore for _some_ reason
-    is_ignored: bool
+    /// if Some, flags this is a variant to ignore for the given reason
+    ignored_reason: Option<IgnoredVariantReason>
 }
 
 impl Variant {
@@ -131,7 +141,7 @@ impl Variant {
             allele1,
             index_allele0,
             index_allele1,
-            is_ignored: false
+            ignored_reason: None
         })
     }
 
@@ -196,7 +206,7 @@ impl Variant {
             allele1,
             index_allele0,
             index_allele1,
-            is_ignored: false
+            ignored_reason: None
         })
     }
 
@@ -252,7 +262,7 @@ impl Variant {
             allele1,
             index_allele0,
             index_allele1,
-            is_ignored: false
+            ignored_reason: None
         })
     }
 
@@ -313,7 +323,7 @@ impl Variant {
             allele1,
             index_allele0,
             index_allele1,
-            is_ignored: false
+            ignored_reason: None
         })
     }
 
@@ -376,7 +386,7 @@ impl Variant {
             allele1,
             index_allele0,
             index_allele1,
-            is_ignored: false
+            ignored_reason: None
         })
     }
 
@@ -435,7 +445,7 @@ impl Variant {
             allele1,
             index_allele0,
             index_allele1,
-            is_ignored: false
+            ignored_reason: None
         })
     }
 
@@ -487,7 +497,7 @@ impl Variant {
             allele1,
             index_allele0,
             index_allele1,
-            is_ignored: false
+            ignored_reason: None
         })
     }
 
@@ -570,12 +580,16 @@ impl Variant {
         &self.allele1
     }
 
-    pub fn is_ignored(&self) -> bool {
-        self.is_ignored
+    pub fn ignored_reason(&self) -> Option<IgnoredVariantReason> {
+        self.ignored_reason
     }
 
-    pub fn set_ignored(&mut self) {
-        self.is_ignored = true;
+    pub fn is_ignored(&self) -> bool {
+        self.ignored_reason.is_some()
+    }
+
+    pub fn set_ignored(&mut self, reason: IgnoredVariantReason) {
+        self.ignored_reason = Some(reason);
     }
 
     pub fn get_truncated_allele0(&self) -> &[u8] {

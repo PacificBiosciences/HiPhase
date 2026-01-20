@@ -1,10 +1,11 @@
 
-use crate::astar_phaser;
+use crate::astar_phaser::{self, AstarConfig, AstarResult};
 use crate::block_gen::{PhaseBlock, is_phasable_variant, get_variant_type};
 use crate::data_types::read_segments::{AlleleType, ReadSegment};
 use crate::data_types::reference_genome::ReferenceGenome;
-use crate::data_types::variants::{Variant, VariantType};
-use crate::read_parsing;
+use crate::data_types::variants::{IgnoredVariantReason, Variant, VariantType};
+use crate::read_parsing::{self, GlobalRealignmentConfig};
+use crate::variant_traversal::optimize_variant_order;
 use crate::writers::phase_stats::{PhaseStats, ReadStats};
 
 use bio::data_structures::interval_tree::IntervalTree;
@@ -12,10 +13,36 @@ use log::{debug, trace};
 use priority_queue::PriorityQueue;
 use rust_htslib::bcf;
 use rust_htslib::bcf::record::GenotypeAllele;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use simple_error::{SimpleError, bail};
 use std::cmp::{Ordering, Reverse};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+
+/// Configuration for the phasing algorithm.
+pub struct PhasingConfig {
+    // variable related to read parsing
+    /// The reference buffer
+    pub reference_buffer: usize,
+    /// The minimum number of matched alleles required to include a read
+    pub min_matched_alleles: usize,
+    /// The minimum MAPQ to include a read
+    pub min_mapq: u8,
+    /// The global realignment configuration
+    pub global_realignment_config: Option<read_parsing::GlobalRealignmentConfig>,
+
+    // variable related to the phasing algorithm
+    /// if true, then we will reorder the variants before phasing
+    pub optimize_variant_order: bool,
+    /// The A* configuration
+    pub astar_config: AstarConfig,
+
+    // variables related to the post-phasing block splitting
+    /// if true, then we will use the old linear block algorithm
+    pub use_linear_block_algorithm: bool,
+    /// the minimum number of connecting reads to use for the non-linearblock algorithm
+    pub min_connecting_reads: u64,
+}
 
 /// Core function for loading variant calls from our VCF file and converting them into a `Variant` type.
 /// # Arguments
@@ -235,11 +262,7 @@ fn load_variant_calls(
 
                 if reference_buffer > 0 && !is_homozygous {
                     // we have a reference genome and a desire buffer, extend our alleles
-                    let mut ref_prefix_start: usize = if (position as usize) > reference_buffer {
-                        position as usize - reference_buffer
-                    } else {
-                        0
-                    };
+                    let mut ref_prefix_start: usize = (position as usize).saturating_sub(reference_buffer);
                     let ref_postfix_start: usize = position as usize + ref_len;
                     
                     // we used to have an assertion here with the plan to remove it eventually, but it turns out
@@ -332,8 +355,8 @@ pub struct PhaseResult {
     pub haplotype_1: Vec<AlleleType>,
     /// The second haplotype in the solution.
     pub haplotype_2: Vec<AlleleType>,
-    /// Store the phase block ID of the variant
-    pub block_ids: Vec<usize>,
+    /// Store the phase block ID of the variant, None if the variant is unphased
+    pub block_ids: Vec<Option<usize>>,
     /// Stores all non-empty sub-blocks
     pub sub_phase_blocks: Vec<PhaseBlock>,
     /// Optional read statistics
@@ -399,18 +422,20 @@ fn get_solution_span_counts(
 /// * `reference_buffer` - the number of nearby bases to try to use for local realignment
 /// * `min_matched_alleles` - the minimum number of matched alleles required to include a read
 /// * `min_mapq` - the minimum MAPQ to include a read
-/// * `min_queue_size` - the minimum length of the queue
-/// * `queue_increment` - the length that the queue grows as more variants are added to the solution
+/// * `astar_config` - the configuration for the A* algorithm
 /// * `global_config` - the global realignment configuration; if None, then only local realignment is used
-#[allow(clippy::too_many_arguments)]
 pub fn solve_block(
     phase_problem: &PhaseBlock, vcf_paths: &[PathBuf], bam_paths: &[PathBuf], 
-    reference_genome: &ReferenceGenome, reference_buffer: usize,
-    min_matched_alleles: usize, min_mapq: u8,
-    min_queue_size: usize, queue_increment: usize, global_config: Option<read_parsing::GlobalRealignmentConfig>
+    reference_genome: &ReferenceGenome, phasing_config: &PhasingConfig
 ) -> Result<(PhaseResult, HaplotagResult), Box<dyn std::error::Error>> {
     debug!("Solving problem: {:?}", phase_problem);
-    
+    // unwrap the phasing configuration
+    let reference_buffer: usize = phasing_config.reference_buffer;
+    let min_matched_alleles: usize = phasing_config.min_matched_alleles;
+    let min_mapq: u8 = phasing_config.min_mapq;
+    let astar_config: &AstarConfig = &phasing_config.astar_config;
+    let global_config: Option<&GlobalRealignmentConfig> = phasing_config.global_realignment_config.as_ref();
+
     // short circuit for "empty" problems
     if phase_problem.get_num_variants() == 0 {
         // this should only happen for chromosomes with no het alleles
@@ -478,7 +503,7 @@ pub fn solve_block(
 
             if is_contained {
                 // we need to mark this one as unphaseable
-                variant.set_ignored();
+                variant.set_ignored(IgnoredVariantReason::TandemRepeatOverlap);
                 debug!("Set ignored het: {:?}", variant);
             }
         }
@@ -504,7 +529,7 @@ pub fn solve_block(
 
             if is_contained {
                 // we need to mark this one as unphaseable
-                variant.set_ignored();
+                variant.set_ignored(IgnoredVariantReason::TandemRepeatOverlap);
                 debug!("Set ignored hom: {:?}", variant);
             }
         }
@@ -516,7 +541,7 @@ pub fn solve_block(
     let phasable_segments: IntervalTree<usize, ReadSegment>;
     let read_stats: ReadStats;
 
-    if let Some(grc) = global_config.as_ref() {
+    if let Some(grc) = global_config {
         
         // we are attempting global re-alignments
         (read_segments, phasable_segments, read_stats) = read_parsing::load_full_read_segments(
@@ -532,83 +557,66 @@ pub fn solve_block(
         )?;
     }
 
+    // TODO: here we should check if there are any variants where no alleles are set; if so, we should mark them as ignored
+    //   furthermore, this may require clearing those alleles, but we can handle that later
+
+    // count the assigned variants for each read segment
+    let assigned_counts: Vec<usize> = count_assigned_variants(variant_calls.len(), &read_segments);
+    for (i, &count) in assigned_counts.iter().enumerate() {
+        if count == 0 {
+            // this variant is not assigned to any reads
+            variant_calls[i].set_ignored(IgnoredVariantReason::NoReadsAssigned);
+            debug!("Set ignored variant, no reads assigned: {:?}", variant_calls[i]);
+        }
+    }
+
     // read segment debugging
     for (i, seg) in read_segments.find(0..usize::MAX).enumerate() {
         trace!("read segment #{} => {:?}", i, seg);
     }
 
     // okay final phase is to solve some algorithm given those read segments
-    let astar_result: astar_phaser::AstarResult = astar_phaser::astar_solver(
-        phase_problem, &variant_calls[..], &read_segments, min_queue_size, queue_increment
+    let reorder_variants = phasing_config.optimize_variant_order;
+    let astar_result: astar_phaser::AstarResult = if reorder_variants {
+        // optimize the variant order
+        let reordered_problem = optimize_variant_order(&variant_calls[..], &read_segments)?;
+
+        // run our solver with the reordered problem
+        let reordered_astar_result = astar_phaser::astar_solver(
+            phase_problem, // the phase block summary information, this should be okay here
+            reordered_problem.variants(),
+            reordered_problem.read_segments(),
+            astar_config
+        );
+
+        // translate the AstarResult to match the original variant order
+        reordered_problem.translate_solution(&reordered_astar_result)
+    } else {
+        astar_phaser::astar_solver(
+            phase_problem, &variant_calls[..], &read_segments, astar_config
+        )
+    };
+
+    debug!("Building phase block IDs...");
+    let block_tags = if phasing_config.use_linear_block_algorithm {
+        // old linear block algorithm
+        build_linear_phase_tags(
+            &variant_calls, &read_segments, &astar_result
+        )
+    } else {
+        // non-linear block algorithm, with a configurable minimum number of connecting reads
+        let min_connecting_reads = phasing_config.min_connecting_reads;
+        get_phase_block_ids(
+            &variant_calls, &read_segments, &astar_result, min_connecting_reads
+        )
+    };
+    debug!("block_ids: {:?}", block_tags);
+
+    // we have the variants grouped into tags (not necessarily final tag value), now build the phase blocks
+    // this function does not require linear blocks, and it works for both methods
+    let sub_phase_blocks = build_sub_phase_blocks(
+        phase_problem, &variant_calls, &block_tags
     );
-
-    // get the total spanning counts after accounting for homozygous variants / missing alleles
-    let total_span_counts: Vec<usize> = get_solution_span_counts(&read_segments, &astar_result.haplotype_1, &astar_result.haplotype_2);
-    debug!("total_span_counts: {:?}", total_span_counts);
-
-    // if we end up having no reads spanning a juncture, it's time to split the block
-    let block_split: Vec<bool> = total_span_counts.iter()
-        .map(|&tc| tc == 0)
-        .collect::<Vec<bool>>();
-    
-    debug!("Block split: {:?}", block_split);
-
-    // now, figure out what the haplotag is for each variant
-    let mut block_tags: Vec<usize> = vec![0; variant_calls.len()];
-    let mut current_tag: usize = variant_calls[0].position() as usize;
-    for (i, variant) in variant_calls.iter().enumerate() {
-        if i > 0 && block_split[i-1] {
-            // this is a new block
-            current_tag = variant.position() as usize;
-        }
-        block_tags[i] = current_tag;
-    }
-    debug!("Block tags: {:?}", block_tags);
-
-    // generate all of our non-empty sub-blocks now
-    let mut sub_phase_blocks: Vec<PhaseBlock> = vec![];
-    let mut current_block: PhaseBlock = PhaseBlock::new(
-        phase_problem.get_block_index(), 
-        phase_problem.get_chrom().to_string(),
-        phase_problem.get_chrom_index(),
-        phase_problem.get_min_quality(),
-        phase_problem.sample_name().to_string(),
-        phase_problem.vcf_index_counts().len()
-    );
-    let mut current_tag = block_tags[0];
-    for (i, variant) in variant_calls.iter().enumerate() {
-        let h1 = astar_result.haplotype_1[i];
-        let h2 = astar_result.haplotype_2[i];
-        if h1 < AlleleType::Ambiguous && h2 < AlleleType::Ambiguous && h1 != h2 {
-            // this is a heterozygous variant in our result
-            if current_tag != block_tags[i] {
-                if current_block.get_num_variants() > 0 {
-                    // it's part of a new block though, so we need to push the old one
-                    sub_phase_blocks.push(current_block);
-                    current_block = PhaseBlock::new(
-                        phase_problem.get_block_index(), 
-                        phase_problem.get_chrom().to_string(), 
-                        phase_problem.get_chrom_index(),
-                        phase_problem.get_min_quality(),
-                        phase_problem.sample_name().to_string(),
-                        phase_problem.vcf_index_counts().len()
-                    );
-                }
-
-                // make sure we update to the new tag also
-                current_tag = block_tags[i];
-            }
-
-            // add the variant to the current block
-            current_block.add_locus_variant(phase_problem.get_chrom(), variant.position() as u64, variant.get_vcf_index());
-        }
-    }
-
-    // check if we have a block left to push
-    if current_block.get_num_variants() > 0 {
-        sub_phase_blocks.push(current_block);
-    }
-    debug!("sub_phase_blocks: {:?}", sub_phase_blocks);
 
     // last step is to haplotag the reads we loaded
     let mut haplotagged_reads: HashMap<String, (usize, usize)> = haplotag_reads(
@@ -648,6 +656,30 @@ pub fn solve_block(
     Ok((phase_result, haplotag_result))
 }
 
+/// Returns a vector of the number of assigned variants for each variant in the block.
+/// # Arguments
+/// * `num_variants` - the number of variants in the block
+/// * `read_segments` - the read segments to count the assigned variants for
+/// # Returns
+/// A vector of the number of assigned variants for each variant in the block
+fn count_assigned_variants(num_variants: usize, read_segments: &IntervalTree<usize, ReadSegment>) -> Vec<usize> {
+    let mut assigned_counts: Vec<usize> = vec![0; num_variants];
+    for rs_interval in read_segments.find(0..usize::MAX) {
+        // get the segment and its region
+        let rs = rs_interval.data();
+        let region = rs.region();
+        #[allow(clippy::needless_range_loop)] // much easier to read this way, ignore clippy
+        for var_index in region.start..region.end {
+            // variants are only assigned if they are definitively reference or alternate
+            let allele = rs.allele(var_index);
+            if allele == AlleleType::Reference || allele == AlleleType::Alternate {
+                assigned_counts[var_index] += 1;
+            }
+        }
+    }
+    assigned_counts
+}
+
 /// This function generates a dummy result for a block we are not phasing.
 /// It is boilerplate for an unsolved block, either because there is only one variant we do not wish to phase OR because there are no reads but there are variants.
 /// In either case, we will mark all the variant alleles as 2/2 to indicate unphased.
@@ -668,7 +700,7 @@ pub fn create_unphased_result(phase_problem: &PhaseBlock) -> (PhaseResult, Haplo
             0,
             1
         ).unwrap();
-        variant_calls.extend(std::iter::repeat(dummy_variant).take(vi_count));
+        variant_calls.extend(std::iter::repeat_n(dummy_variant, vi_count));
     }
 
     assert_eq!(variant_calls.len(), num_variants);
@@ -680,7 +712,7 @@ pub fn create_unphased_result(phase_problem: &PhaseBlock) -> (PhaseResult, Haplo
         variants: variant_calls,
         haplotype_1: vec![AlleleType::Reference; num_variants],
         haplotype_2: vec![AlleleType::Reference; num_variants],
-        block_ids: vec![phase_problem.get_start() as usize; num_variants],
+        block_ids: vec![None; num_variants],
         sub_phase_blocks: vec![], // empty because this is not getting treated as a block
         read_statistics: None,
         statistics: None
@@ -690,6 +722,189 @@ pub fn create_unphased_result(phase_problem: &PhaseBlock) -> (PhaseResult, Haplo
         reads: Default::default() // no haplotagging in this mode, so give back an empty map
     };
     (phase_result, haplotag_result)
+}
+
+/// Builds the linear phase tags for the variants in the block.
+/// This is the original linear approach where we assume blocks are contiguous and non-overlapping.
+/// # Arguments
+/// * `variant_calls` - the variant calls to build the phase tags for
+/// * `read_segments` - the read segments to use to build the phase tags
+/// * `astar_result` - the AstarResult to use to build the phase tags
+/// # Returns
+/// A vector of the phase tags for the variants in the block
+fn build_linear_phase_tags(
+    variant_calls: &[Variant],
+    read_segments: &IntervalTree<usize, ReadSegment>,
+    astar_result: &AstarResult
+) -> Vec<Option<usize>> {
+    // get the total spanning counts after accounting for homozygous variants / missing alleles
+    let total_span_counts: Vec<usize> = get_solution_span_counts(read_segments, &astar_result.haplotype_1, &astar_result.haplotype_2);
+    debug!("total_span_counts: {:?}", total_span_counts);
+
+    // if we end up having no reads spanning a juncture, it's time to split the block
+    let block_split: Vec<bool> = total_span_counts.iter()
+        .map(|&tc| tc == 0)
+        .collect::<Vec<bool>>();
+
+    debug!("Block split: {:?}", block_split);
+
+    // now, figure out what the haplotag is for each variant
+    let mut block_tags: Vec<Option<usize>> = vec![None; variant_calls.len()];
+    let mut current_tag: usize = variant_calls[0].position() as usize;
+    let haplotype_1 = &astar_result.haplotype_1;
+    let haplotype_2 = &astar_result.haplotype_2;
+    for (i, variant) in variant_calls.iter().enumerate() {
+        // we will not tag any ignored variants or variants that are flagged as homozygous
+        if !variant.is_ignored() && haplotype_1[i] != haplotype_2[i] {
+            if i > 0 && block_split[i-1] {
+                // this is a new block
+                current_tag = variant.position() as usize;
+            }
+
+            // set the block tag
+            block_tags[i] = Some(current_tag);
+        }
+    }
+    debug!("Block tags: {:?}", block_tags);
+    block_tags
+}
+
+/// Builds the phase block IDs for the variants in the block.
+/// This is a new approach where we can have blocks that overlap due to things like splicing.
+/// # Arguments
+/// * `variants` - the variant calls to build the phase block IDs for
+/// * `read_segments` - the read segments to use to build the phase block IDs
+/// * `astar_result` - the AstarResult to use to build the phase block IDs
+/// * `min_connecting_reads` - the minimum number of reads that must connect a variant to a block to be included in the block
+/// # Returns
+/// A vector of the phase block IDs for the variants in the block
+/// # Panics
+/// * If `min_connecting_reads` is less than 1
+fn get_phase_block_ids(
+    variants: &[Variant],
+    read_segments: &IntervalTree<usize, ReadSegment>,
+    astar_result: &AstarResult,
+    min_connecting_reads: u64
+) -> Vec<Option<usize>> {
+    assert!(min_connecting_reads > 0);
+
+    // get the haplotypes from the AstarResult
+    let haplotype_1 = &astar_result.haplotype_1;
+    let haplotype_2 = &astar_result.haplotype_2;
+
+    // sanity checks
+    assert_eq!(variants.len(), haplotype_1.len());
+    assert_eq!(variants.len(), haplotype_2.len());
+
+    // initialize the block ids to none
+    let num_variants: usize = variants.len();
+    let mut block_ids: Vec<Option<usize>> = vec![None; num_variants];
+
+    for i in 0..num_variants {
+        if haplotype_1[i] == haplotype_2[i] || 
+            block_ids[i].is_some() {
+            // this is a homozygous variant, so we don't need to check any further OR
+            // we already have a block id for this variant, so we can skip to the next variant
+            continue;
+        }
+
+        // initialize our block ID to the position of this variant
+        let block_id = variants[i].position() as usize;
+        let mut variants_in_block: HashSet<usize> = HashSet::default();
+        let mut variants_to_explore = BTreeSet::default();
+        variants_to_explore.insert(i);
+
+        while let Some(variant_index) = variants_to_explore.pop_first() {
+            if variants_in_block.contains(&variant_index) {
+                // this variant is already in our block, which means we already analyzed it
+                // do a quick sanity check and move on
+                assert_eq!(block_ids[variant_index], Some(block_id));
+                continue;
+            }
+
+            // make sure this variant is not ignored
+            assert!(!variants[variant_index].is_ignored());
+            assert_ne!(haplotype_1[variant_index], haplotype_2[variant_index]);
+
+            // add this variant to the block
+            variants_in_block.insert(variant_index);
+            block_ids[variant_index] = Some(block_id);
+
+            debug!("Adding variant {} to block {}", variant_index, block_id);
+            let mut connecting_counts: BTreeMap<usize, u64> = BTreeMap::default();
+
+            // now go through all the read segments that contain this variant
+            for rs_interval in read_segments.find(variant_index..variant_index+1) {
+                // get the read segment
+                let rs = rs_interval.data();
+                let rs_range = rs.region();
+
+                // check that the variant we popped is a valid allele for this read segment
+                let i_allele = rs.allele(variant_index);
+                if i_allele == AlleleType::Ambiguous || i_allele == AlleleType::NoOverlap {
+                    // this read segment does not contain a valid allele for this variant, so we can skip it
+                    continue;
+                }
+
+                // iterate over the other valid alleles in the read segment
+                for j in rs_range.start..rs_range.end {
+                    // get the allele at this index
+                    let allele = rs.allele(j);
+                    if allele == AlleleType::Ambiguous || allele == AlleleType::NoOverlap || // read is ambiguous or no overlap at this allele
+                        haplotype_1[j] == haplotype_2[j] || // this allele is homozygous in our solution
+                        variants_in_block.contains(&j) { // this allele is already in our block, do not double count
+                        continue;
+                    } else {
+                        // add the variant to the list of variants to explore
+                        // variants_to_explore.insert(j);
+                        *connecting_counts.entry(j).or_insert(0) += 1;
+                    }
+                }
+            }
+
+            // now, check if any of the variants have enough connecting reads to be included in the block
+            for (variant_index, count) in connecting_counts.iter() {
+                if *count >= min_connecting_reads {
+                    variants_to_explore.insert(*variant_index);
+                }
+            }
+        }
+    }
+
+    // return the block ids
+    block_ids
+}
+
+fn build_sub_phase_blocks(
+    phase_problem: &PhaseBlock,
+    variant_calls: &[Variant],
+    block_tags: &[Option<usize>]
+) -> Vec<PhaseBlock> {
+    // initialize our sub-phase blocks, we want these to be sorted by the block index so use a BTreeMap
+    let mut sub_phase_blocks: BTreeMap<usize, PhaseBlock> = BTreeMap::default();
+
+    // now, iterate through the variant calls and build the sub-phase blocks
+    for (variant, block_tag) in variant_calls.iter().zip(block_tags.iter()) {
+        if let Some(block_index) = block_tag {
+            let block = sub_phase_blocks.entry(*block_index)
+                .or_insert(PhaseBlock::new(
+                    phase_problem.get_block_index(),
+                    phase_problem.get_chrom().to_string(),
+                    phase_problem.get_chrom_index(),
+                    phase_problem.get_min_quality(),
+                    phase_problem.sample_name().to_string(),
+                    phase_problem.vcf_index_counts().len()
+                ));
+
+            // add the variant to the current block
+            block.add_locus_variant(
+                phase_problem.get_chrom(), variant.position() as u64, variant.get_vcf_index()
+            );
+        }
+    }
+
+    // convert the BTreeMap to a Vec of the values, we can drop the keys now
+    sub_phase_blocks.into_values().collect()
 }
 
 /// Stores all information for a haplotag result
@@ -713,7 +928,7 @@ pub struct HaplotagResult {
 /// * the block breaks is not 1 less length than the variant calls
 pub fn haplotag_reads(
     read_segments: IntervalTree<usize, ReadSegment>, 
-    haplotype_1: &[AlleleType], haplotype_2: &[AlleleType], block_tags: &[usize]
+    haplotype_1: &[AlleleType], haplotype_2: &[AlleleType], block_tags: &[Option<usize>]
 ) -> HashMap<String, (usize, usize)> {
     // now do the tagging
     let mut haplotagged_reads: HashMap<String, (usize, usize)> = Default::default();
@@ -731,18 +946,25 @@ pub fn haplotag_reads(
         if haplotag != 2 {
             // we can resolve to a haplotype, now get the phase block index
             // find the first resolved variant in our read segment
-            let mut first_variant: usize = rs.region().start;
+            let region = rs.region();
+            let mut first_variant: usize = region.start;
 
-            // while the haplotypes are equal there OR the variant is not resolved (which can happen sometimes)
-            while haplotype_1[first_variant] == haplotype_2[first_variant] || rs.allele(first_variant) >= AlleleType::Ambiguous {
+            // TODO: it's possible that a read hits multiple blocks; this approach tags by the first variant with a tag
+            //       this may not be the optimal method, but we'll leave it for now
+
+            // the variant is untagged OR the variant is not resolved (which can happen sometimes)
+            while block_tags[first_variant].is_none() || rs.allele(first_variant) >= AlleleType::Ambiguous {
                 first_variant += 1;
             }
-            let phase_block: usize = block_tags[first_variant];
+            assert!(first_variant < region.end); // this should never happen, but we'll assert it just in case
 
-            // finally, just get the read name and make sure we haven't somehow already marked this one
-            let read_name: String = rs.read_name().to_string();
-            assert!(!haplotagged_reads.contains_key(&read_name));
-            haplotagged_reads.insert(read_name, (phase_block, haplotag));
+            // assuming the phase block is set, we can tag the read now
+            if let Some(phase_block) = block_tags[first_variant] {
+                // finally, just get the read name and make sure we haven't somehow already marked this one
+                let read_name: String = rs.read_name().to_string();
+                assert!(!haplotagged_reads.contains_key(&read_name));
+                haplotagged_reads.insert(read_name, (phase_block, haplotag));
+            }
         }
     }
 
@@ -778,7 +1000,7 @@ mod tests {
     fn test_haplotag_reads() {
         let haplotype_1: Vec<AlleleType> = vec![0, 0, 0, 0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect();
         let haplotype_2: Vec<AlleleType> = vec![1, 1, 1, 1, 1, 1].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect();
-        let block_tags = vec![0, 0, 0, 3, 3, 5];
+        let block_tags = vec![Some(0), Some(0), Some(0), Some(3), Some(3), Some(5)];
         let test_reads = vec![
             ReadSegment::new("r1".to_string(), vec![0, 0, 0, 0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![1, 1, 1, 1, 1, 1]),
             ReadSegment::new("r2".to_string(), vec![2, 2, 2, 1, 1, 2].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(), vec![0, 0, 0, 1, 1, 0]),
@@ -833,5 +1055,123 @@ mod tests {
             expected_variant
         ]);
         assert!(hom_variants.is_empty());
+    }
+
+    /// Returns a generic AstarResult with the given length for the haplotypes.
+    /// # Arguments
+    /// * `length` - the length of the haplotypes
+    /// # Returns
+    /// A generic AstarResult with the given length for the haplotypes
+    fn get_generic_astar_result(length: usize) -> AstarResult {
+        AstarResult {
+            haplotype_1: vec![AlleleType::Reference; length],
+            haplotype_2: vec![AlleleType::Alternate; length],
+            statistics: PhaseStats::astar_new(0, 0, 0, length as u64, length as u64, 0, 0),
+        }
+    }
+
+    #[test]
+    fn test_complete_phase_tags() {
+        // test case 1: single continuous block - all variants connected
+        let astar_result = get_generic_astar_result(3);
+        let variants1 = vec![
+            Variant::new_snv(0, 100, b"A".to_vec(), b"T".to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, 200, b"G".to_vec(), b"C".to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, 300, b"T".to_vec(), b"A".to_vec(), 0, 1).unwrap(),
+        ];
+        let test_reads = vec![
+            // Read spanning all three variants
+            ReadSegment::new("r1".to_string(),
+                vec![0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(),
+                vec![10, 10, 10]),
+            ReadSegment::new("r2".to_string(),
+                vec![1, 1, 1].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(),
+                vec![10, 10, 10]),
+        ];
+        let mut read_segments: IntervalTree<usize, ReadSegment> = Default::default();
+        for rs in test_reads.into_iter() {
+            let rs_range = rs.region().clone();
+            read_segments.insert(rs_range, rs);
+        }
+
+        // All variants should be in the same block (tagged with first variant's position)
+        let linear_result = build_linear_phase_tags(&variants1, &read_segments, &astar_result);
+        assert_eq!(linear_result, vec![Some(100), Some(100), Some(100)]);
+        let clump_result = get_phase_block_ids(&variants1, &read_segments, &astar_result, 1);
+        assert_eq!(clump_result, vec![Some(100), Some(100), Some(100)]);
+
+        // check that we can require more than 1 read to connect a variant to a block
+        let clump_result = get_phase_block_ids(&variants1, &read_segments, &astar_result, 3);
+        assert_eq!(clump_result, vec![Some(100), Some(200), Some(300)]);
+    }
+
+    #[test]
+    fn test_interwoven_phase_tags() {
+        // test case: two overlapping blocks that are separate
+        let astar_result = get_generic_astar_result(3);
+        let variants1 = vec![
+            Variant::new_snv(0, 100, b"A".to_vec(), b"T".to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, 200, b"G".to_vec(), b"C".to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, 300, b"T".to_vec(), b"A".to_vec(), 0, 1).unwrap(),
+        ];
+        let test_reads = vec![
+            // Read spanning all three variants
+            ReadSegment::new("r1".to_string(),
+                vec![0, 3, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(),
+                vec![10, 0, 10]),
+            ReadSegment::new("r2".to_string(),
+                vec![3, 1, 3].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(),
+                vec![0, 10, 0]),
+        ];
+        let mut read_segments: IntervalTree<usize, ReadSegment> = Default::default();
+        for rs in test_reads.into_iter() {
+            let rs_range = rs.region().clone();
+            read_segments.insert(rs_range, rs);
+        }
+
+        // linear result thinks they all go together, which is why it's not as good
+        let linear_result = build_linear_phase_tags(&variants1, &read_segments, &astar_result);
+        assert_eq!(linear_result, vec![Some(100), Some(100), Some(100)]);
+
+        // this one finds the two clumps
+        let clump_result = get_phase_block_ids(&variants1, &read_segments, &astar_result, 1);
+        assert_eq!(clump_result, vec![Some(100), Some(200), Some(100)]);
+    }
+
+    #[test]
+    fn test_homozygous_phase_tags() {
+        // test case: first variant is homozygous, so it's not in the block and not tagged
+        let astar_result = AstarResult {
+            haplotype_1: vec![AlleleType::Reference, AlleleType::Reference, AlleleType::Reference],
+            haplotype_2: vec![AlleleType::Reference, AlleleType::Alternate, AlleleType::Alternate],
+            statistics: PhaseStats::astar_new(0, 0, 0, 3, 3, 0, 0),
+        };
+        let variants1 = vec![
+            Variant::new_snv(0, 100, b"A".to_vec(), b"T".to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, 200, b"G".to_vec(), b"C".to_vec(), 0, 1).unwrap(),
+            Variant::new_snv(0, 300, b"T".to_vec(), b"A".to_vec(), 0, 1).unwrap(),
+        ];
+        let test_reads = vec![
+            // Read spanning all three variants
+            ReadSegment::new("r1".to_string(),
+                vec![0, 0, 0].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(),
+                vec![10, 10, 10]),
+            ReadSegment::new("r2".to_string(),
+                vec![0, 1, 1].into_iter().map(|v| AlleleType::from_repr(v).unwrap()).collect(),
+                vec![0, 10, 10]),
+        ];
+        let mut read_segments: IntervalTree<usize, ReadSegment> = Default::default();
+        for rs in test_reads.into_iter() {
+            let rs_range = rs.region().clone();
+            read_segments.insert(rs_range, rs);
+        }
+
+        // linear result thinks they all go together, which is why it's not as good
+        let linear_result = build_linear_phase_tags(&variants1, &read_segments, &astar_result);
+        assert_eq!(linear_result, vec![None, Some(200), Some(200)]);
+
+        // this one finds the two clumps
+        let clump_result = get_phase_block_ids(&variants1, &read_segments, &astar_result, 1);
+        assert_eq!(clump_result, vec![None, Some(200), Some(200)]);
     }
 }

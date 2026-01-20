@@ -82,6 +82,13 @@ hiphase \
 [2023-02-02T20:40:11.347Z INFO  hiphase] All phase blocks finished successfully after 1605.008968506 seconds.
 ```
 
+## Presets
+HiPhase's default settings are configured for whole-genome sequencing datasets.
+HiPhase includes a `--preset` option that will set multiple options for other types of data.
+Current list of presets:
+* unspecified - Default settings are best for whole-genome sequencing
+* `rna` - Configured for RNA-seq (isoseq) datasets, same as `--disable-global-realignment --optimize-variant-order --min-connecting-reads 7`
+
 ## Recommended resources
 HiPhase has built in parallel processing via the `--threads` parameter.
 For a typical human whole genome with ~30x coverage, we recommend reserving 4 GB of memory per thread allocated to HiPhase.
@@ -166,7 +173,9 @@ The following upstream processes are supported as inputs to HiPhase:
   * [minimap2](https://github.com/lh3/minimap2)
 * Variant callers
   * [DeepVariant](https://github.com/google/deepvariant) - for SNV/indel
-  * [pbsv](https://github.com/PacificBiosciences/pbsv) - for structural variants
+  * Structural variants:
+    * [pbsv](https://github.com/PacificBiosciences/pbsv)
+    * [sawfish](https://github.com/PacificBiosciences/sawfish)
   * [TRGT](https://github.com/PacificBiosciences/trgt) - for tandem repeats
 
 Other upstream processes may work with HiPhase, but there is no official support for them at this time.
