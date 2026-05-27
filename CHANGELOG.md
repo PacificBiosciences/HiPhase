@@ -1,3 +1,11 @@
+# v1.7.0
+## Changes
+* Added a limit to the WFA edit distance that scales with the length of the mapping. This reduces run-time in regions with short mapped fragments and high edit distance relative to the reference.
+* Added `--global-realignment-max-ed-ratio <FRAC>` which controls the above scaling factor.  Default is 0.1, representing 10% of the mapped fragment length.
+
+## Fixed
+* Fixed an issue where repeated HTSlib warnings (e.g. stale index file) would appear, these should now show up once during the initial load
+
 # v1.6.0
 ## Changes
 * Added support for RNA sequencing dataset, which required or were facilitated by the following changes

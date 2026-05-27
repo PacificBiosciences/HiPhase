@@ -219,6 +219,13 @@ pub struct Settings {
     #[clap(help_heading = Some("Allele Assignment"))]
     pub global_max_edit_distance: usize,
 
+    /// Per-region edit distance cap as a fraction of aligned segment length
+    #[clap(long = "global-realignment-max-ed-ratio")]
+    #[clap(value_name = "FRAC")]
+    #[clap(default_value = "0.1")]
+    #[clap(help_heading = Some("Allele Assignment"))]
+    pub global_max_ed_ratio: f64,
+
     /// Sets a pruning threshold on global realignment, set to 0 to disable pruning
     #[clap(long = "global-pruning-distance")]
     #[clap(value_name = "LENGTH")]
@@ -353,6 +360,7 @@ impl Settings {
         } else {
             Some(GlobalRealignmentConfig {
                 max_edit_distance: self.global_max_edit_distance,
+                max_ed_ratio: self.global_max_ed_ratio,
                 wfa_prune_distance: self.wfa_prune_distance,
                 global_failure_ratio: self.global_failure_ratio,
                 global_failure_minimum: self.global_failure_minimum
@@ -467,6 +475,11 @@ pub fn check_settings(mut settings: Settings) -> Settings {
             warn!("\tGlobal max edit distance is set very high, this may lead to significant computational costs");
         }
         info!("\tGlobal re-alignment max edit distance: {}", settings.global_max_edit_distance);
+        if !(settings.global_max_ed_ratio > 0.0 && settings.global_max_ed_ratio <= 1.0) {
+            error!("--global-realignment-max-ed-ratio must be in the range (0.0, 1.0]");
+            std::process::exit(exitcode::USAGE);
+        }
+        info!("\tGlobal re-alignment max edit distance ratio: {}", settings.global_max_ed_ratio);
         if settings.wfa_prune_distance == usize::MAX {
             info!("\tGlobal prune distance: DISABLED");
         } else {

@@ -162,6 +162,7 @@ The following options control how global realignment is used for read parsing:
 
 * `--disable-global-realignment` - this will disable global realignment for the entire process; this is recommended if _only_ a small variant VCF is available
 * `--global-realignment-max-ed <DISTANCE>` - sets a maximum on the edit distance for global realignment for a single read mapping; if this maximum is reached, HiPhase will revert to local realignment for the mapping; increasing this value may increase run-time but also generate better realignments
+* `--global-realignment-max-ed-ratio <FRAC>` - sets a per-region edit distance cap as a fraction of the aligned segment length, potentially shortening the length allowed by `--global-realignment-max-ed`
 * `--max-global-failure-ratio <FRAC>` - sets a maximum fraction of global realignment failures to allow before reverting the rest of the phase block to local realignment; increasing this may lead to more global realignments, but also to longer run times; decreasing this may lead to fewer global realignments, but also improved run times in noisy phase blocks
 * `--global-failure-count <COUNT>` - sets the minimum number of global realignment failures before the failure ratio check is active 
 

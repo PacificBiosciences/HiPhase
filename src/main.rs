@@ -201,6 +201,9 @@ fn main() {
     // we have to do this because we need access to the reference genome later also
     let arc_reference_genome: Arc<ReferenceGenome> = Arc::new(reference_genome);
 
+    // suppress repeated HTSlib warnings after the initial load
+    suppress_htslib_warnings();
+
     //process the blocks (eventually in parallel)
     let start_time: Instant = Instant::now();
     let mut total_variants: u64 = 0;
@@ -703,6 +706,16 @@ fn create_block_iterator(
     };
 
     (block_iterator, sample_to_bams, sample_to_output_bams)
+}
+
+/// Suppress HTSlib warning-level log output for the remainder of the process.
+/// Affects all threads (global `hts_verbose`); hides all HTSlib warnings, not only stale-index messages.
+fn suppress_htslib_warnings() {
+    unsafe {
+        rust_htslib::htslib::hts_set_log_level(
+            rust_htslib::htslib::htsLogLevel_HTS_LOG_ERROR,
+        );
+    }
 }
 
 /// Panic handler for the rayon thread pool that logs an error and exits the program
