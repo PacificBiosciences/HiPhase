@@ -25,6 +25,8 @@ const MISSING_QUAL: u8 = 0;
 pub struct GlobalRealignmentConfig {
     /// Maximum allowed edit distance before bailing
     pub max_edit_distance: usize,
+    /// Maximum edit distance as a fraction of aligned segment length (per-region cap)
+    pub max_ed_ratio: f64,
     /// Maximum allowed distance a wavefront can lag; make smaller to reduce run-time at the cost of accuracy
     pub wfa_prune_distance: usize,
     /// Maximum global failure rate before we fallback to local-realignment
@@ -547,7 +549,10 @@ pub fn load_full_read_segments(
                 (a, q, rs, global_realignment_config.max_edit_distance)
             } else {
                 // global is still active, so give it a whirl
-                match global_realignment(phase_problem, &read, variant_calls, hom_calls, reference_genome, global_realignment_config.wfa_prune_distance, global_realignment_config.max_edit_distance) {
+                match global_realignment(
+                    phase_problem, &read, variant_calls, hom_calls,
+                    reference_genome, global_realignment_config
+                ) {
                     Ok(r) => r,
                     Err(e) => {
                         if e.is::<WFAGraphError>() {
@@ -631,8 +636,7 @@ pub fn load_full_read_segments(
 /// * `variant_calls` - the variants to label
 /// * `hom_calls` - additional homozygous calls for the WFA
 /// * `reference_genome` - the reference genome for sequence lookup
-/// * `wfa_prune_distance` - the pruning distance for the WFAGraph exploration
-/// * `global_max_edit_distance` - maximum allowed edit distance before bailing out
+/// * `global_realignment_config` - global realignment settings (edit distance caps, pruning, etc.)
 /// # Errors
 /// * if the record cannot be parsed correctly
 /// * if the maximum edit distance is reached
@@ -641,7 +645,7 @@ fn global_realignment(
     phase_problem: &PhaseBlock, read: &bam::Record, 
     variant_calls: &[Variant], hom_calls: &[Variant],
     reference_genome: &ReferenceGenome,
-    wfa_prune_distance: usize, global_max_edit_distance: usize
+    global_realignment_config: &GlobalRealignmentConfig,
 ) -> Result<(Vec<AlleleType>, Vec<u8>, ReadStats, usize), Box<dyn std::error::Error>> {
     use rust_htslib::bam::ext::BamRecordExtensions;
     use rust_htslib::bam::record::Cigar;
@@ -806,6 +810,15 @@ fn global_realignment(
         */
         let chromosome = phase_problem.get_chrom();
         let chrom_seq: &[u8] = reference_genome.get_full_chromosome(chromosome);
+
+        // figure out how much ED we allow for this region, which is a function of the length and the max_edit_distance
+        let read_align_len = read_align.len();
+        let max_region_ed = (read_align_len as f64 * global_realignment_config.max_ed_ratio).ceil() as usize;
+
+        // limit the maximum edit distance to the global maximum or the region maximum, whichever is smaller
+        let max_wfa_ed = global_realignment_config.max_edit_distance.min(max_region_ed);
+
+        debug!("read_align.len() => {}, max_region_ed => {}, max_wfa_ed => {}", read_align_len, max_region_ed, max_wfa_ed);
         
         // we need to also provide any preset alleles
         let start_time = std::time::Instant::now();
@@ -816,11 +829,11 @@ fn global_realignment(
                 &hom_calls[first_hom_overlap..last_hom_overlap],
                 min_position as usize, 
                 max_position as usize + 1,
-                global_max_edit_distance
-            ).unwrap();
+                max_wfa_ed
+            )?;
         
         // pass through for the WFA errors now
-        let wfa_result: WFAResult = wfa_graph.edit_distance_with_pruning(read_align, wfa_prune_distance)?;
+        let wfa_result: WFAResult = wfa_graph.edit_distance_with_pruning(read_align, global_realignment_config.wfa_prune_distance)?;
 
         debug!(
             "B#{} WFAGraph result ({}) => num_nodes: {}, read_len: {}, variant_overlaps: {}, edit_distance: {}", 

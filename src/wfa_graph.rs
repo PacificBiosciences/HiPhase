@@ -141,8 +141,7 @@ impl WFAGraph {
         for variant in hom_variants.iter() {
             all_variants.push((variant, None));
         }
-        all_variants.sort_by(|v1, v2| v1.0.position().cmp(&v2.0.position()));
-
+        all_variants.sort_by_key(|v| v.0.position());
         for (variant, variant_index) in all_variants.iter() {
             if variant.is_ignored() {
                 // I don't think we need a trace message here for now
