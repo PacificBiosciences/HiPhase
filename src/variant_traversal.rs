@@ -281,7 +281,7 @@ mod tests {
         // optimize the variant order and check it
         let optimized_problem = optimize_variant_order(&variants, &read_segments).unwrap();
         let expected_index_order = vec![2, 0, 1];
-        let reverse_lookup = vec![1, 2, 0];
+        let reverse_lookup = [1, 2, 0];
         assert_eq!(optimized_problem.index_order(), &expected_index_order);
 
         // check the reordered variants
@@ -306,8 +306,8 @@ mod tests {
         };
 
         // we need to translate these to get the expected haplotypes
-        let expected_h1: Vec<AlleleType> = reverse_lookup.iter().map(|&i| astar_result.haplotype_1[i].clone()).collect();
-        let expected_h2: Vec<AlleleType> = reverse_lookup.iter().map(|&i| astar_result.haplotype_2[i].clone()).collect();
+        let expected_h1: Vec<AlleleType> = reverse_lookup.iter().map(|&i| astar_result.haplotype_1[i]).collect();
+        let expected_h2: Vec<AlleleType> = reverse_lookup.iter().map(|&i| astar_result.haplotype_2[i]).collect();
 
         let translated_astar_result = optimized_problem.translate_solution(&astar_result);
         assert_eq!(translated_astar_result.haplotype_1, expected_h1);

@@ -276,70 +276,52 @@ impl StatsWriter {
     /// # Arguments
     /// * `phase_result` - the phasing results, which wraps block metadata, the read statistics, and the phasing statistics
     pub fn write_stats(&mut self, phase_result: &PhaseResult) -> csv::Result<()> {
-        let num_reads;
-        let skipped_reads;
-        let num_alleles;
-        let allele_matches;
-        let allele_partials;
-        let allele_failures;
-        let allele0_assigned;
-        let allele1_assigned;
-        let global_aligned;
-        let local_aligned;
-        match &phase_result.read_statistics {
-            Some(rs) => {
-                num_reads = Some(rs.num_reads);
-                skipped_reads = Some(rs.skipped_reads);
-                num_alleles = Some(rs.num_alleles);
-                allele_matches = Some(format!("{:?}", rs.exact_matches));
-                allele_partials = Some(format!("{:?}", rs.inexact_matches));
-                allele_failures = Some(format!("{:?}", rs.failed_matches));
-                allele0_assigned = Some(format!("{:?}", rs.allele0_matches));
-                allele1_assigned = Some(format!("{:?}", rs.allele1_matches));
-                global_aligned = Some(rs.global_aligned);
-                local_aligned = Some(rs.local_aligned);
-            },
-            None => {
-                num_reads = None;
-                skipped_reads = None;
-                num_alleles = None;
-                allele_matches = None;
-                allele_partials = None;
-                allele_failures = None;
-                allele0_assigned = None;
-                allele1_assigned = None;
-                global_aligned = None;
-                local_aligned = None;
-            }
+        let (
+            num_reads,
+            skipped_reads,
+            num_alleles,
+            allele_matches,
+            allele_partials,
+            allele_failures,
+            allele0_assigned,
+            allele1_assigned,
+            global_aligned,
+            local_aligned,
+        ) = match &phase_result.read_statistics {
+            Some(rs) => (
+                Some(rs.num_reads),
+                Some(rs.skipped_reads),
+                Some(rs.num_alleles),
+                Some(format!("{:?}", rs.exact_matches)),
+                Some(format!("{:?}", rs.inexact_matches)),
+                Some(format!("{:?}", rs.failed_matches)),
+                Some(format!("{:?}", rs.allele0_matches)),
+                Some(format!("{:?}", rs.allele1_matches)),
+                Some(rs.global_aligned),
+                Some(rs.local_aligned),
+            ),
+            None => (None, None, None, None, None, None, None, None, None, None),
         };
-        
-        let pruned_solutions;
-        let estimated_cost;
-        let actual_cost;
-        let cost_ratio;
-        let phased_variants;
-        let homozygous_variants;
-        let skipped_variants;
 
-        match &phase_result.statistics {
-            Some(ps) => {
-                pruned_solutions = ps.pruned_solutions;
-                estimated_cost = ps.estimated_cost;
-                actual_cost = ps.actual_cost;
-                cost_ratio = ps.get_cost_ratio();
-                phased_variants = ps.phased_variants;
-                homozygous_variants = ps.homozygous_variants;
-                skipped_variants = ps.skipped_variants;
-            },
-            None => {
-                pruned_solutions = None;
-                estimated_cost = None;
-                actual_cost = None;
-                cost_ratio = None;
-                phased_variants = None;
-                homozygous_variants = None;
-                skipped_variants = None;
-            }
+        let (
+            pruned_solutions,
+            estimated_cost,
+            actual_cost,
+            cost_ratio,
+            phased_variants,
+            homozygous_variants,
+            skipped_variants,
+        ) = match &phase_result.statistics {
+            Some(ps) => (
+                ps.pruned_solutions,
+                ps.estimated_cost,
+                ps.actual_cost,
+                ps.get_cost_ratio(),
+                ps.phased_variants,
+                ps.homozygous_variants,
+                ps.skipped_variants,
+            ),
+            None => (None, None, None, None, None, None, None),
         };
 
         let row: CsvRow = CsvRow {

@@ -854,8 +854,8 @@ mod tests {
         );
 
         let mut read_segments: IntervalTree<usize, ReadSegment> = IntervalTree::new();
-        for rs in std::iter::repeat(rs1).take(num_rs1)
-            .chain(std::iter::repeat(rs2).take(num_rs2)) {
+        for rs in std::iter::repeat_n(rs1, num_rs1)
+            .chain(std::iter::repeat_n(rs2, num_rs2)) {
             read_segments.insert(rs.region().clone(), rs);
         }
 

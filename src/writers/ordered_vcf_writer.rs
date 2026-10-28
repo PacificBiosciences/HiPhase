@@ -209,7 +209,7 @@ impl OrderedVcfWriter {
                             // now setup for the next chromosome
                             self.current_chrom = chrom_result.to_string();
                             self.current_pos = 0;
-                            for (_k, v) in self.current_positions.iter_mut() {
+                            for v in self.current_positions.values_mut() {
                                 // set all current positions back to 0
                                 *v = 0;
                             }
@@ -273,7 +273,7 @@ impl OrderedVcfWriter {
         
         // sanity check to make sure all queues are empty once we get to this point
         for hm in self.phase_queues.iter() {
-            for (_sample_name, queue) in hm.iter() {
+            for queue in hm.values() {
                 if !queue.is_empty() {
                     bail!("Finished writing chromosome, but variant queues are not empty");
                 }
@@ -338,7 +338,9 @@ impl OrderedVcfWriter {
                         for si in 0..record.sample_count() {
                             let genotype = record_gt.get(si as usize);
                             match genotype.len() {
-                                0 => bail!("Encountered empty genotype record at position {}", record.pos()),
+                                0 => {
+                                    bail!("Encountered empty genotype record at position {}", record.pos());
+                                },
                                 1 => {
                                     // TRGT can make single-allele GT calls, just copy it over as normal
                                     // it will not be modified below because it is a homozygous allele
@@ -352,7 +354,7 @@ impl OrderedVcfWriter {
                                 },
                                 gt_len => {
                                     // we do not have 3+ GT entries implemented
-                                    bail!("Encountered GT of length {} at record {}", gt_len, record.desc())
+                                    bail!("Encountered GT of length {} at record {}", gt_len, record.desc());
                                 }
                             }
                         }
@@ -459,7 +461,9 @@ fn strip_record_phasing(record: &mut bcf::Record) -> Result<(), Box<dyn std::err
     for si in 0..record.sample_count() {
         let genotype = record_gt.get(si as usize);
         match genotype.len() {
-            0 => bail!("Encountered empty genotype record at position {}", record.pos()),
+            0 => {
+                bail!("Encountered empty genotype record at position {}", record.pos());
+            },
             1 => {
                 // TRGT can make single-allele GT calls, just copy it over as normal
                 // it will not be modified below because it is a homozygous allele
@@ -478,7 +482,7 @@ fn strip_record_phasing(record: &mut bcf::Record) -> Result<(), Box<dyn std::err
             },
             gt_len => {
                 // we do not have 3+ GT entries implemented
-                bail!("Encountered GT of length {} at record {}", gt_len, record.desc())
+                bail!("Encountered GT of length {} at record {}", gt_len, record.desc());
             }
         }
     }
@@ -535,7 +539,7 @@ mod tests {
         let mut vcf_reader = bcf::Reader::from_path(&vcf_fn).unwrap();
 
         // expectations for sample 1
-        let expected_gt1 = vec![
+        let expected_gt1 = [
             vec![GenotypeAllele::Unphased(0), GenotypeAllele::Unphased(1)],
             vec![GenotypeAllele::Unphased(1), GenotypeAllele::Unphased(1)],
             vec![GenotypeAllele::Unphased(1)],
@@ -543,7 +547,7 @@ mod tests {
         ];
 
         // expectations for sample 2
-        let expected_gt2 = vec![
+        let expected_gt2 = [
             vec![GenotypeAllele::Unphased(0), GenotypeAllele::Unphased(1)],
             vec![GenotypeAllele::Unphased(0), GenotypeAllele::Unphased(0)],
             vec![GenotypeAllele::Unphased(1), GenotypeAllele::Unphased(2)],

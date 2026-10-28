@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(collapsed.score_haplotype(&haplotype), 1);
 
         // check stupid collapsing also
-        let collapsed = ReadSegment::collapse(&[rs1.clone()]);
+        let collapsed = ReadSegment::collapse(std::slice::from_ref(&rs1));
         assert_eq!(collapsed, rs1);
     }
 
