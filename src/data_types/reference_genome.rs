@@ -106,7 +106,7 @@ mod tests {
     use std::path::PathBuf;
     #[test]
     fn test_simple_reference() {
-        let references = vec![
+        let references = [
             "./test_data/test_reference.fa",
             "./test_data/test_reference.fa.gz"
         ];
@@ -122,12 +122,12 @@ mod tests {
             //chr1 = ACGTACGT
             let chr1_string: Vec<u8> = "ACGTACGT".as_bytes().to_vec();
             for i in 0..8 {
-                assert_eq!(reference_genome.get_slice(&"chr1", i, 8), &chr1_string[i..]);
+                assert_eq!(reference_genome.get_slice("chr1", i, 8), &chr1_string[i..]);
             }
 
             //chr2 = ACCATGTA
             let chr1_string: Vec<u8> = "ACCATGTA".as_bytes().to_vec();
-            assert_eq!(reference_genome.get_slice(&"chr2", 0, 8), chr1_string);
+            assert_eq!(reference_genome.get_slice("chr2", 0, 8), chr1_string);
         }
     }
 }

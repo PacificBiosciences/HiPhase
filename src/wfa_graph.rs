@@ -843,12 +843,12 @@ mod tests {
         let variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
         // remember ALT alleles get added before reference alleles
-        assert_eq!(graph.edit_distance(&reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3] });
+        assert_eq!(graph.edit_distance(reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3] });
         assert_eq!(graph.edit_distance("ACA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 3] });
         assert_eq!(graph.edit_distance("AA".as_bytes()).unwrap(), WFAResult { score: 1, traversed_nodes: vec![0, 1, 2, 3] });
 
@@ -870,7 +870,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 7);
@@ -879,7 +879,7 @@ mod tests {
         REF: 0 -> 2 -> 3 -> 5 -> 6
         ALT:   -> 1 -^   -> 4 -^
          */
-        assert_eq!(graph.edit_distance(&reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3, 5, 6] });
+        assert_eq!(graph.edit_distance(reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3, 5, 6] });
         assert_eq!(graph.edit_distance("ACAAA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 3, 5, 6] });
         assert_eq!(graph.edit_distance("AAACA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3, 4, 6] });
         assert_eq!(graph.edit_distance("ACACA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 3, 4, 6] });
@@ -910,7 +910,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 7);
@@ -920,7 +920,7 @@ mod tests {
         ALT:   -> 1      -^
                     -> 3      -^
          */
-        assert_eq!(graph.edit_distance(&reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 4, 5, 6] });
+        assert_eq!(graph.edit_distance(reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 4, 5, 6] });
         assert_eq!(graph.edit_distance("ACTA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 5, 6] });
         assert_eq!(graph.edit_distance("ACGA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3, 6] });
         // ACGTA -> AGTA, 1 ed; ACTA -> AGTA, 1 ed; so first allele is ambiguous, other should be reference
@@ -949,7 +949,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 5);
@@ -958,7 +958,7 @@ mod tests {
         ALT:   -> 1 -^
                -> 2 -^
         */
-        assert_eq!(graph.edit_distance(&reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 3, 4] });
+        assert_eq!(graph.edit_distance(reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 3, 4] });
         assert_eq!(graph.edit_distance("ACGTTA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 2, 4] });
         // tests an insertion of the wrong character, this should be fully ambiguous
         assert_eq!(graph.edit_distance("ACGATA".as_bytes()).unwrap(), WFAResult { score: 1, traversed_nodes: vec![0, 1, 2, 3, 4] });
@@ -981,7 +981,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 5);
@@ -990,7 +990,7 @@ mod tests {
         ALT:   -> 1 -^
                -> 2 -^
         */
-        assert_eq!(graph.edit_distance(&reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 3, 4] });
+        assert_eq!(graph.edit_distance(reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 3, 4] });
         assert_eq!(graph.edit_distance("ACGA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 4] });
         assert_eq!(graph.edit_distance("ACGTTA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 4] });
         // we can't really get an ambiguous allele assignment here, but we can do ambiguous branches
@@ -1015,7 +1015,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 2, reference.len()-2, 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 2, reference.len()-2, 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
@@ -1046,7 +1046,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 2, reference.len()-1, 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 2, reference.len()-1, 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 9);
@@ -1102,7 +1102,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, ref_start, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, ref_start, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
@@ -1125,7 +1125,7 @@ mod tests {
         ];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
         
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 1);
@@ -1142,7 +1142,7 @@ mod tests {
         let hom_variants = vec![Variant::new_snv(0, 1, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants_with_hom(&reference, &variants, &hom_variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants_with_hom(reference, &variants, &hom_variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 7);
@@ -1168,12 +1168,12 @@ mod tests {
         let variants = vec![Variant::new_snv(0, 0, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
         // remember ALT alleles get added before reference alleles
-        assert_eq!(graph.edit_distance(&reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3] });
+        assert_eq!(graph.edit_distance(reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3] });
         assert_eq!(graph.edit_distance("CAA".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 3] });
         assert_eq!(graph.edit_distance("AA".as_bytes()).unwrap(), WFAResult { score: 1, traversed_nodes: vec![0, 1, 2, 3] });
 
@@ -1190,12 +1190,12 @@ mod tests {
         let variants = vec![Variant::new_snv(0, 2, "A".as_bytes().to_vec(), "C".as_bytes().to_vec(), 0, 1).unwrap()];
 
         let (graph, node_to_alleles): (WFAGraph, NodeAlleleMap) = 
-            WFAGraph::from_reference_variants(&reference, &variants, 0, reference.len(), 1000).unwrap();
+            WFAGraph::from_reference_variants(reference, &variants, 0, reference.len(), 1000).unwrap();
 
         // check the alignments first
         assert_eq!(graph.get_num_nodes(), 4);
         // remember ALT alleles get added before reference alleles
-        assert_eq!(graph.edit_distance(&reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3] });
+        assert_eq!(graph.edit_distance(reference).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 2, 3] });
         assert_eq!(graph.edit_distance("AAC".as_bytes()).unwrap(), WFAResult { score: 0, traversed_nodes: vec![0, 1, 3] });
         assert_eq!(graph.edit_distance("AA".as_bytes()).unwrap(), WFAResult { score: 1, traversed_nodes: vec![0, 1, 2, 3] });
 

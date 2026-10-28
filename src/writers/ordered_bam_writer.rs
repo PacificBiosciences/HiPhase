@@ -63,13 +63,7 @@ impl OrderedBamWriter {
             let mut output_header: bam::header::Header = bam::header::Header::from_template(&bam_header);
             let cli_string: String = std::env::args().collect::<Vec<String>>().join(" ");
             let cli_version: &str = &crate::cli::FULL_VERSION;
-
-            let mut cli_record = bam::header::HeaderRecord::new("PG".as_bytes());
-            cli_record.push_tag("PN".as_bytes(), &"hiphase");
-            cli_record.push_tag("ID".as_bytes(), &format!("hiphase-v{cli_version}"));
-            cli_record.push_tag("VN".as_bytes(), &cli_version);
-            cli_record.push_tag("CL".as_bytes(), &cli_string);
-            output_header.push_record(&cli_record);
+            append_hiphase_program_record(&mut output_header, &bam_header, cli_version, &cli_string);
             
             // TODO: do we need to add something to the BAM headers? I'm not sure yet, we'll come back to this
             // output_header.push_record(r#"##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set identifier">"#.as_bytes());
@@ -355,6 +349,75 @@ impl OrderedBamWriter {
     }
 }
 
+/// Collects existing `@PG` ID values from a BAM header.
+/// Parses `@PG` lines from the header text so comment (`@CO`) lines are ignored.
+/// # Arguments
+/// * `header` - the BAM header whose text is scanned for `@PG` ID fields
+fn collect_pg_ids(header: &bam::HeaderView) -> HashSet<String> {
+    // TODO: this method converts the header to bytes and then parses like a string
+    //       it would be better to parse the header directly, but machinery is missing from htslib
+    let mut ids: HashSet<String> = Default::default();
+    for line in header.as_bytes().split(|&b| b == b'\n') {
+        if !line.starts_with(b"@PG") {
+            continue;
+        }
+        for field in line.split(|&b| b == b'\t') {
+            if let Some(id_bytes) = field.strip_prefix(b"ID:") {
+                if let Ok(id) = std::str::from_utf8(id_bytes) {
+                    if !id.is_empty() {
+                        ids.insert(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Returns `base_id`, or `base_id.1`, `base_id.2`, ... if that ID is already present.
+/// # Arguments
+/// * `existing_ids` - `@PG` IDs already present in the header
+/// * `base_id` - the preferred program ID for this HiPhase run
+fn unique_pg_id(existing_ids: &HashSet<String>, base_id: &str) -> String {
+    if !existing_ids.contains(base_id) {
+        return base_id.to_string();
+    }
+    let mut suffix: u32 = 1;
+    loop {
+        let candidate = format!("{base_id}.{suffix}");
+        if !existing_ids.contains(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+/// Appends a HiPhase `@PG` record with an ID that does not collide with records already in the header.
+/// # Arguments
+/// * `output_header` - the BAM header that will receive the new `@PG` record
+/// * `template_header` - the input BAM header whose existing `@PG` records are scanned for ID collisions
+/// * `cli_version` - the HiPhase version string written to the `VN` tag and used in the program ID
+/// * `cli_string` - the command line written to the `CL` tag
+fn append_hiphase_program_record(
+    output_header: &mut bam::header::Header,
+    template_header: &bam::HeaderView,
+    cli_version: &str,
+    cli_string: &str,
+) {
+    // figure out a unique program ID that doesn't collide with existing ones
+    let base_id = format!("hiphase-v{cli_version}");
+    let existing_ids = collect_pg_ids(template_header);
+    let pg_id = unique_pg_id(&existing_ids, &base_id);
+
+    // build the new record
+    let mut cli_record = bam::header::HeaderRecord::new(b"PG");
+    cli_record.push_tag(b"PN", &"hiphase");
+    cli_record.push_tag(b"ID", &pg_id);
+    cli_record.push_tag(b"VN", &cli_version);
+    cli_record.push_tag(b"CL", &cli_string);
+    output_header.push_record(&cli_record);
+}
+
 /// Removes the phase tags that HiPhase will normally write from a record.
 /// This is so we erase anything that did not come from the tool.
 fn strip_record_phasing(record: &mut bam::Record) -> Result<(), rust_htslib::errors::Error> {
@@ -380,6 +443,7 @@ fn strip_record_phasing(record: &mut bam::Record) -> Result<(), rust_htslib::err
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_htslib::bam::HeaderView;
     
     /// Simple empty bam record creator; if we just use a "new()" record, htslib is unhappy when we access Aux
     fn dummy_bam_record() -> bam::Record {
@@ -391,6 +455,41 @@ mod tests {
             &[255]
         );
         record
+    }
+
+    /// Builds a minimal SAM header with optional `@PG` lines for uniqueness tests.
+    fn header_with_pg_ids(pg_ids: &[&str]) -> bam::header::Header {
+        let mut header = bam::header::Header::new();
+        let mut hd = bam::header::HeaderRecord::new(b"HD");
+        hd.push_tag(b"VN", &"1.6");
+        hd.push_tag(b"SO", &"coordinate");
+        header.push_record(&hd);
+
+        let mut sq = bam::header::HeaderRecord::new(b"SQ");
+        sq.push_tag(b"SN", &"chr1");
+        sq.push_tag(b"LN", &"1000");
+        header.push_record(&sq);
+
+        for pg_id in pg_ids {
+            let mut pg = bam::header::HeaderRecord::new(b"PG");
+            pg.push_tag(b"ID", pg_id);
+            pg.push_tag(b"PN", &"hiphase");
+            header.push_record(&pg);
+        }
+        header
+    }
+
+    /// Appends a HiPhase `@PG` record and returns the header after an htslib round-trip.
+    fn append_and_roundtrip(prior_pg_ids: &[&str], version: &str) -> HeaderView {
+        let template = header_with_pg_ids(prior_pg_ids);
+        let template_view = HeaderView::from_header(&template);
+        let mut output_header = bam::header::Header::from_template(&template_view);
+        append_hiphase_program_record(&mut output_header, &template_view, version, "hiphase --test");
+        HeaderView::from_header(&output_header)
+    }
+
+    fn pg_ids_in_header(header: &HeaderView) -> Vec<String> {
+        collect_pg_ids(header).into_iter().collect()
     }
 
     #[test]
@@ -410,5 +509,63 @@ mod tests {
         strip_record_phasing(&mut record).unwrap();
         assert_eq!(record.aux(b"HP").err().unwrap(), rust_htslib::errors::Error::BamAuxTagNotFound);
         assert_eq!(record.aux(b"PS").err().unwrap(), rust_htslib::errors::Error::BamAuxTagNotFound);
+    }
+
+    #[test]
+    fn test_pg_id_first_run_uses_base_id() {
+        let version = "1.7.0-abcdef1";
+        let base_id = format!("hiphase-v{version}");
+        let header = append_and_roundtrip(&[], version);
+        let ids = pg_ids_in_header(&header);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&base_id));
+    }
+
+    #[test]
+    fn test_pg_id_unrelated_prior_keeps_base_id() {
+        let version = "1.7.0-abcdef1";
+        let base_id = format!("hiphase-v{version}");
+        let header = append_and_roundtrip(&["pbmm2", "hiphase-v1.6.0-oldhash"], version);
+        let ids = pg_ids_in_header(&header);
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&"pbmm2".to_string()));
+        assert!(ids.contains(&"hiphase-v1.6.0-oldhash".to_string()));
+        assert!(ids.contains(&base_id));
+        assert!(!ids.contains(&format!("{base_id}.1")));
+    }
+
+    #[test]
+    fn test_pg_id_duplicate_gets_dot_one_suffix() {
+        let version = "1.7.0-abcdef1";
+        let base_id = format!("hiphase-v{version}");
+        let header = append_and_roundtrip(&[&base_id], version);
+        let ids = pg_ids_in_header(&header);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&base_id));
+        assert!(ids.contains(&format!("{base_id}.1")));
+    }
+
+    #[test]
+    fn test_pg_id_third_run_gets_dot_two_suffix() {
+        let version = "1.7.0-abcdef1";
+        let base_id = format!("hiphase-v{version}");
+        let prior_owned = [base_id.clone(), format!("{base_id}.1")];
+        let prior_refs: Vec<&str> = prior_owned.iter().map(|s| s.as_str()).collect();
+        let header = append_and_roundtrip(&prior_refs, version);
+        let ids = pg_ids_in_header(&header);
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&base_id));
+        assert!(ids.contains(&format!("{base_id}.1")));
+        assert!(ids.contains(&format!("{base_id}.2")));
+    }
+
+    #[test]
+    fn test_collect_pg_ids_ignores_co_lines() {
+        let mut header = header_with_pg_ids(&["hiphase-v1.0"]);
+        header.push_comment(b"ID:not-a-pg-id");
+        let header_view = HeaderView::from_header(&header);
+        let ids = collect_pg_ids(&header_view);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains("hiphase-v1.0"));
     }
 }

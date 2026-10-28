@@ -93,7 +93,7 @@ pub fn load_read_segments(
     // now collapse all the reads, but only keeping those with at least 2 things set
     let mut read_segments: IntervalTree<usize, ReadSegment> = IntervalTree::new();
     let mut phasable_segments: IntervalTree<usize, ReadSegment> = IntervalTree::new();
-    for (_qname, read_group) in read_groups.iter() {
+    for read_group in read_groups.values() {
         let collapsed_read: ReadSegment = ReadSegment::collapse(read_group);
         let num_set: usize = collapsed_read.get_num_set();
         if num_set >= min_matched_alleles {
@@ -604,7 +604,7 @@ pub fn load_full_read_segments(
     // now collapse all the reads, but only keeping those with at least 2 things set
     let mut read_segments: IntervalTree<usize, ReadSegment> = IntervalTree::new();
     let mut phasable_segments: IntervalTree<usize, ReadSegment> = IntervalTree::new();
-    for (_qname, read_group) in read_groups.iter() {
+    for read_group in read_groups.values() {
         let collapsed_read: ReadSegment = ReadSegment::collapse(read_group);
         let num_set: usize = collapsed_read.get_num_set();
         if num_set >= min_matched_alleles {

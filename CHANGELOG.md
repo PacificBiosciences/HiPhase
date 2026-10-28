@@ -1,3 +1,7 @@
+# v1.7.1
+## Fixed
+* Fixed duplicate `@PG` IDs when re-running HiPhase on a BAM it already haplotagged; the new program ID is uniquified with a numeric suffix. Resolves [#80](https://github.com/PacificBiosciences/HiPhase/issues/80).
+
 # v1.7.0
 ## Changes
 * Added a limit to the WFA edit distance that scales with the length of the mapping. This reduces run-time in regions with short mapped fragments and high edit distance relative to the reference.
